@@ -83,6 +83,27 @@ function deepClone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
+/** 结构化比较。用来判断"值到底变没变"，不受键顺序和缩进影响。 */
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return false;
+  if (typeof a !== 'object') return false;
+
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    return a.every((item, i) => deepEqual(item, b[i]));
+  }
+
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((key) => (
+    Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key])
+  ));
+}
+
 function clamp(value, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return min;
@@ -209,8 +230,25 @@ class ConfigManager extends EventEmitter {
     return this.get();
   }
 
-  /** 原子写入：先写临时文件再改名，避免进程被中断时留下半截 JSON。 */
+  /**
+   * 原子写入：先写临时文件再改名，避免进程被中断时留下半截 JSON。
+   *
+   * 如果磁盘上的值跟当前配置完全一样，就直接跳过不写。这一点很重要：
+   * 界面里每点一次开关都会走 patch() → save()，而 JSON.stringify 的
+   * 缩进规则跟用户手写的排版不一定一致（比如数组是单行还是多行）。
+   * 不做这个判断的话，config.json 会一直显示成"已修改"，
+   * 在 git 里看着像改了什么，其实只是被重新格式化了。
+   */
   save() {
+    try {
+      if (fs.existsSync(this.configPath)) {
+        const existing = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+        if (deepEqual(existing, this.config)) return;
+      }
+    } catch {
+      // 读不了或者解析不了（文件坏了/被占用），照常往下走去覆盖它
+    }
+
     const dir = path.dirname(this.configPath);
     const tmp = `${this.configPath}.tmp`;
     try {
