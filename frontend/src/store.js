@@ -59,7 +59,14 @@ export function setState(patch) {
 
 // ------------------------------------------------------------------ 数据加载
 
-/** 从 /api/control 拉取网络与故障状态。 */
+/**
+ * 从 /api/control 拉取网络与故障状态。
+ *
+ * 注意这里**不碰** state.connected：控制类接口是不受模拟影响的，
+ * 它永远能成功。如果在这里把它置为 true，那么"开了断网 → 顶栏显示连接中断 →
+ * 随手拨一下故障开关 → 顶栏立刻翻回已连接"这种来回跳就会一直发生。
+ * 连通性只能由 /api/health（那个是走模拟器的）单一来源决定。
+ */
 export async function loadControl() {
   const data = await api.control.get()
   setState({
@@ -67,7 +74,6 @@ export async function loadControl() {
     fault: data.fault,
     hotUpdate: data.hotUpdate,
     simulating: Boolean(data.network.enabled || data.fault.enabled),
-    connected: true,
   })
   return data
 }
@@ -97,7 +103,7 @@ export async function loadFavorites() {
 
 export async function loadStats(windowMinutes = 5) {
   const data = await api.stats(windowMinutes)
-  setState({ stats: data, connected: true })
+  setState({ stats: data })
   return data
 }
 
@@ -110,19 +116,30 @@ export async function loadSystem() {
 /**
  * 启动时的一次性初始化。
  * 用 allSettled：某个接口失败（比如资产目录还没建）不该让整个界面打不开。
+ *
+ * @returns {{failed:number, total:number, tasks:string[]}} 失败/总数，
+ *   调用方用 failed === total 判断"后端整体不可用"。
+ *   （原来返回的是失败数组，调用方却拿它和「路由数量」比较，那个条件
+ *     永远不成立 —— 提示语是死代码。）
  */
 export async function bootstrap() {
-  const results = await Promise.allSettled([
-    loadControl(),
-    loadPlatforms(),
-    loadPresets(),
-    loadFavorites(),
-    loadSystem(),
-    loadStats(),
-  ])
-  const failed = results.filter((r) => r.status === 'rejected')
-  if (failed.length === results.length) {
+  const tasks = [
+    ['control', loadControl],
+    ['platforms', loadPlatforms],
+    ['presets', loadPresets],
+    ['favorites', loadFavorites],
+    ['system', loadSystem],
+    ['stats', loadStats],
+  ]
+
+  const results = await Promise.allSettled(tasks.map(([, fn]) => fn()))
+  const failedTasks = results
+    .map((r, i) => (r.status === 'rejected' ? tasks[i][0] : null))
+    .filter(Boolean)
+
+  if (failedTasks.length === tasks.length) {
     setState({ connected: false })
   }
-  return failed
+
+  return { failed: failedTasks.length, total: tasks.length, tasks: failedTasks }
 }

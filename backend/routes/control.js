@@ -7,7 +7,15 @@
 // 或者把服务设成断网，界面必须还能连上，否则就只能去改配置文件了。
 
 const express = require('express');
-const FaultInjector = require('../modules/faultInjector');
+const faultRule = require('../core/faultRule');
+const { DEFAULTS } = require('../core/configManager');
+
+/**
+ * 允许通过接口修改的网络字段。
+ * 从 DEFAULTS 的键派生，而不是手抄一份清单 —— 否则以后往 DEFAULTS 里
+ * 加一个网络参数，接口会静默丢弃它，使用者只会觉得"我调了没反应"。
+ */
+const NETWORK_FIELDS = Object.keys(DEFAULTS.network);
 
 module.exports = function createControlRouter({ configManager, faultInjector, assetServer }) {
   const router = express.Router();
@@ -57,13 +65,12 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
    */
   router.patch('/network', (req, res) => {
     const body = req.body || {};
-    const allowed = ['enabled', 'offline', 'latencyMs', 'jitterMs', 'bandwidthKbps', 'packetLossRate'];
     const partial = {};
-    for (const key of allowed) {
+    for (const key of NETWORK_FIELDS) {
       if (body[key] !== undefined) partial[key] = body[key];
     }
     if (!Object.keys(partial).length) {
-      return res.status(400).json({ error: `没有可更新的字段，允许的字段：${allowed.join(', ')}` });
+      return res.status(400).json({ error: `没有可更新的字段，允许的字段：${NETWORK_FIELDS.join(', ')}` });
     }
 
     const cfg = configManager.patch({ network: partial });
@@ -133,11 +140,29 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
   });
 
   router.post('/fault/rules', (req, res) => {
-    const rule = FaultInjector.createRule(req.body || {});
-    const rules = configManager.get('fault.rules') || [];
-    rules.push(rule);
-    configManager.patch({ fault: { rules } });
-    res.status(201).json({ ok: true, rule, hits: 0 });
+    // 归一化 + 校验。非法输入必须**明确报错**，不能静默降级 ——
+    // 原实现把未知的 action.type 悄悄当成 'status'，使用者拼错类型之后
+    // 看到的是莫名其妙的 500，而不是"你的类型名写错了"。
+    const existing = configManager.get('fault.rules') || [];
+    const normalized = faultRule.normalizeRule(req.body || {}, existing.length);
+    if (!normalized.ok) {
+      return res.status(400).json({ error: normalized.reason });
+    }
+
+    const rules = [...existing, normalized.rule];
+    const cfg = configManager.patch({ fault: { rules } });
+
+    // 建了规则但总闸没开，是使用者最容易踩的坑（"为什么我建了规则什么都没发生"）。
+    // 接口直接把这件事说出来，而不是让人自己去比对 fault.enabled。
+    const faultEnabled = Boolean(cfg.fault.enabled);
+    return res.status(201).json({
+      ok: true,
+      rule: faultInjector.describeRules().find((r) => r.id === normalized.rule.id) || normalized.rule,
+      faultEnabled,
+      ...(faultEnabled ? {} : {
+        warning: '故障注入总闸当前是关闭的，这条规则不会生效。请打开「启用故障注入」。',
+      }),
+    });
   });
 
   /**
@@ -167,12 +192,23 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
       return res.status(404).json({ error: `规则不存在：${req.params.id}` });
     }
 
-    // 用 createRule 归一化一遍，保证字段类型和默认值是一致的，
-    // 但保留原来的 id，避免前端只改一个字段就把 id 换掉了
-    const merged = FaultInjector.createRule({ ...rules[index], ...(req.body || {}), id: rules[index].id });
-    rules[index] = merged;
-    configManager.patch({ fault: { rules } });
-    return res.json({ ok: true, rule: merged });
+    // 用与新增完全相同的校验路径，保证 PUT 也不能绕过校验往里塞非法值。
+    // id 强制沿用原值，避免前端只改一个字段就把 id 换掉。
+    const merged = faultRule.normalizeRule(
+      { ...rules[index], ...(req.body || {}), id: rules[index].id },
+      index,
+    );
+    if (!merged.ok) {
+      return res.status(400).json({ error: merged.reason });
+    }
+
+    const next = rules.slice();
+    next[index] = merged.rule;
+    configManager.patch({ fault: { rules: next } });
+    return res.json({
+      ok: true,
+      rule: faultInjector.describeRules().find((r) => r.id === merged.rule.id) || merged.rule,
+    });
   });
 
   router.delete('/fault/rules/:id', (req, res) => {

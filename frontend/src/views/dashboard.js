@@ -9,8 +9,7 @@
 
 import Chart from 'chart.js/auto'
 import { t } from '../locales/index.js'
-import { loadStats, state, on } from '../store.js'
-import { reportError } from '../ui/toast.js'
+import { loadStats, state } from '../store.js'
 import { esc, fmtBytes, fmtDuration } from '../ui/dom.js'
 import { View, pageHeader, statCard, card, emptyState } from './common.js'
 
@@ -54,14 +53,21 @@ export class DashboardView extends View {
 
     this.container.querySelector('#dashRefresh').addEventListener('click', () => this.refresh())
 
-    // 切走页面时把 on('change') 的订阅取消掉
-    this.addCleanup(on('change', () => {
-      if (this.active) this.paint()
-    }))
-
-    this.every(3000, () => this.refresh())
-
     await this.refresh()
+  }
+
+  /**
+   * 定时刷新放在 setup() 而不是 render()。
+   *
+   * render() 会被 refresh() 反复调用，在里面注册 interval 和订阅的话，
+   * 每次刷新都会多一份 —— 原来每 3 秒就会重建 4 个 Chart 实例。
+   *
+   * 这里也刻意**不**订阅 store 的 change 事件：refresh() 自己会画，
+   * 再订阅一次就会每次刷两遍（一次来自 setState 的同步广播，一次来自
+   * refresh 末尾的显式 paint）。
+   */
+  async setup() {
+    this.every(3000, () => this.refresh())
   }
 
   async refresh() {

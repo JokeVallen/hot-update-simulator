@@ -110,10 +110,35 @@ export class View {
     this.container = container
     this.active = true
     await this.render()
+    // 副作用只在挂载时安装一次
+    await this.setup()
   }
 
-  // eslint-disable-next-line no-unused-vars
+  /**
+   * 渲染 DOM。
+   *
+   * **可以**被 refresh() 反复调用，所以这里不能注册定时器、订阅或 SSE 连接 ——
+   * 那些要放在 setup()。否则每刷新一次就多一份，且旧的永远不会被清理。
+   */
   async render() {
     throw new Error('视图必须实现 render()')
+  }
+
+  /**
+   * 安装副作用：定时器、事件订阅、SSE 连接。
+   * 只在 mount() 时调用一次，配合 destroy() 里的清理形成完整生命周期。
+   */
+  async setup() {}
+
+  /**
+   * 重新拉数据并重画。
+   *
+   * 外部想"刷新当前页面"时应该调这个，**不要**直接调 render()：
+   * 原来的急停按钮就是直接调 render()，于是 LogsView 又开了一条 SSE 流，
+   * 旧的那条永远不会关闭，同一批日志被推两遍。
+   */
+  async refresh() {
+    if (!this.active || !this.container) return
+    await this.render()
   }
 }

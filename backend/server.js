@@ -12,7 +12,7 @@ const configManager = app.locals.configManager;
 const logger = app.locals.logger;
 
 const port = Number(process.env.PORT) || configManager.get('server.port') || 5500;
-const host = process.env.HOST || configManager.get('server.host') || '0.0.0.0';
+const host = process.env.HOST || configManager.get('server.host') || '127.0.0.1';
 
 const server = app.listen(port, host, () => {
   const assetRoot = app.locals.assetServer.root();
@@ -26,6 +26,13 @@ const server = app.listen(port, host, () => {
   console.log(`  配置文件   ${configManager.configPath}`);
   console.log(`  资产目录   ${assetRoot}`);
   console.log(`  可用平台   ${platforms.length ? platforms.join(', ') : '（空，请把热更包放进资产目录）'}`);
+
+  if (host === '0.0.0.0' || host === '::') {
+    console.warn('');
+    console.warn('  ⚠ 正在监听所有网络接口。控制类接口没有认证，');
+    console.warn('    同局域网内的任何机器都能读写模拟参数、注入故障、读取全部请求日志。');
+    console.warn('    只在需要给真机联调时这样用，用完改回 127.0.0.1。');
+  }
   console.log('');
   logger.log({ message: `服务器已启动，监听 ${host}:${port}` });
 });

@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 class JsonStore {
   /**
@@ -35,7 +36,10 @@ class JsonStore {
 
   write(data) {
     const dir = path.dirname(this.filePath);
-    const tmp = `${this.filePath}.tmp`;
+    // 临时文件名必须唯一：原来所有并发写都用同一个 <file>.tmp，
+    // 两个请求同时改收藏时，其中一个的 rename 会失败（另一个已经把 tmp 移走了），
+    // 而失败被静默吞掉 —— 表现就是"我加了一条收藏但没保存上"。
+    const tmp = `${this.filePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');

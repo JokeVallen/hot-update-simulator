@@ -80,7 +80,7 @@ export class FaultsView extends View {
     const matchParts = []
     if (match.method) matchParts.push(`method=${match.method}`)
     if (match.pathPrefix) matchParts.push(`path^=${match.pathPrefix}`)
-    if (match.pathRegex) matchParts.push(`regex=${match.pathRegex}`)
+    if (match.pathGlob) matchParts.push(`glob=${match.pathGlob}`)
     if (match.platform) matchParts.push(`platform=${match.platform}`)
     const matchText = matchParts.length ? matchParts.join('  ') : `*  ${t('faults.matchAny')}`
 
@@ -160,7 +160,7 @@ export class FaultsView extends View {
         enabled: true,
         probability: 1,
         maxHits: 0,
-        match: { method: '', pathPrefix: '', pathRegex: '', platform: '' },
+        match: { method: '', pathPrefix: '', pathGlob: '', platform: '' },
         action: { type: 'abort', status: 500, delayMs: 0, ratio: 0.5, body: '' },
       }
       this.render()
@@ -218,7 +218,11 @@ export class FaultsView extends View {
       })
     })
 
-    this.bindEditor()
+    // 注意：这里**不能**调 bindEditor()。
+    // bind() 执行时 #faultEditor 还是空的（编辑器 HTML 由 openEditor 写入），
+    // bindEditor() 里的 host.querySelector('#feCancel') 会拿到 null 而抛
+    // TypeError —— 结果是点「新增规则」直接报错、编辑器永远打不开。
+    // 编辑器的事件绑定放在 openEditor() 写完 innerHTML 之后。
   }
 
   // ------------------------------------------------------------- 规则编辑器
@@ -275,9 +279,10 @@ export class FaultsView extends View {
               value="${esc(match.pathPrefix)}" placeholder="/assets">
           </div>
           <div class="col-6 col-md-3">
-            <label class="form-label small mb-1">${esc(t('faults.matchPathRegex'))}</label>
-            <input type="text" class="form-control form-control-sm mono" id="fePathRegex"
-              value="${esc(match.pathRegex)}" placeholder="^/assets/.*\\.ab$">
+            <label class="form-label small mb-1">${esc(t('faults.matchPathGlob'))}</label>
+            <input type="text" class="form-control form-control-sm mono" id="fePathGlob"
+              value="${esc(match.pathGlob)}" placeholder="/assets/**/*.ab">
+            <div class="form-text">${esc(t('faults.matchPathGlobHint'))}</div>
           </div>
           <div class="col-6 col-md-3">
             <label class="form-label small mb-1">${esc(t('faults.matchPlatform'))}</label>
@@ -343,6 +348,9 @@ export class FaultsView extends View {
       </div>`
 
     this.applyVisibility()
+    // innerHTML 写完之后才绑定事件。放在这里而不是 bind() 里，
+    // 是因为 bind() 运行时这些元素还不存在。
+    this.bindEditor()
   }
 
   /** 按当前故障类型显示/隐藏相关字段——不相关的字段留着只会让人填错。 */
@@ -362,8 +370,15 @@ export class FaultsView extends View {
     }[type] || []
 
     this.container.querySelectorAll('[data-when]').forEach((node) => {
-      const groups = node.dataset.when.split(',')
-      node.classList.toggle('d-none', !groups.some((g) => show.includes(g)))
+      const visible = node.dataset.when.split(',').some((g) => show.includes(g))
+      node.classList.toggle('d-none', !visible)
+      // 隐藏的同时必须 disabled：只加 d-none 的话，输入框里的值依然会被
+      // 提交上去。实测后果是——把一条 slowHeader(delayMs=3000) 改成 abort 时，
+      // 看不见的延迟值仍然落盘，规则悄悄变成"先等 3 秒再掐断"，
+      // 而且在编辑器里再也改不掉（除非切回慢响应头）。
+      node.querySelectorAll('input, select, textarea').forEach((field) => {
+        field.disabled = !visible
+      })
     })
 
     const hint = this.container.querySelector('#feTypeHint')
@@ -377,20 +392,29 @@ export class FaultsView extends View {
     const typeSelect = host.querySelector('#feType')
     if (typeSelect) typeSelect.addEventListener('change', () => this.applyVisibility())
 
-    host.querySelector('#feCancel').addEventListener('click', () => {
-      this.editing = null
-      this.render()
-    })
+    // 全部加判空：编辑器可能因为任何原因没有完整渲染出来，
+    // 这里抛异常会让整个页面卡在半途（原来就是这样，点「新增规则」直接报错）。
+    const cancelBtn = host.querySelector('#feCancel')
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        this.editing = null
+        this.render()
+      })
+    }
 
     const saveBtn = host.querySelector('#feSave')
-    saveBtn.addEventListener('click', async () => {
-      saveBtn.disabled = true
-      try {
-        await this.submitEditor()
-      } finally {
-        saveBtn.disabled = false
-      }
-    })
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        saveBtn.disabled = true
+        try {
+          await this.submitEditor()
+        } finally {
+          // 保存成功后整页会重新渲染，saveBtn 已经脱离文档；
+          // 给一个已卸载的节点设 disabled 没有意义。
+          if (saveBtn.isConnected) saveBtn.disabled = false
+        }
+      })
+    }
 
     const deleteBtn = host.querySelector('#feDelete')
     if (deleteBtn) {
@@ -429,7 +453,7 @@ export class FaultsView extends View {
       match: {
         method: value('#feMethod'),
         pathPrefix: value('#fePathPrefix').trim(),
-        pathRegex: value('#fePathRegex').trim(),
+        pathGlob: value('#fePathGlob').trim(),
         platform: value('#fePlatform').trim(),
       },
       action: {

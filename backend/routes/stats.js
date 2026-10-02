@@ -29,14 +29,19 @@ module.exports = function createStatsRouter({ logger }) {
    *       200: { description: 统计数据 }
    */
   router.get('/', (req, res) => {
-    const windowMinutes = Math.max(1, Number(req.query.windowMinutes) || 5);
-    const since = Date.now() - windowMinutes * 60_000;
+    // 窗口上限：不加限制的话 `?windowMinutes=100000` 会让时间线分配
+    // 上百万个对象（bucketCount 与窗口长度成正比），一个请求就能把内存打满。
+    const windowMinutes = Math.min(24 * 60, Math.max(1, Number(req.query.windowMinutes) || 5));
+    const now = Date.now();
+    const windowStart = now - windowMinutes * 60_000;
 
-    const recent = logger.query({ since });
+    const recent = logger.query({ since: windowStart });
     // 只统计真正的 HTTP 请求；模拟器自己产生的事件没有 method
     const requests = recent.filter((e) => e.method);
 
     const byStatusClass = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0, disconnected: 0 };
+    // 窗口内的级别统计，与全局统计分开（见响应体里的说明）
+    const byLevel = { info: 0, warn: 0, error: 0 };
     const byPath = new Map();
     const durations = [];
     let totalBytes = 0;
@@ -52,6 +57,8 @@ module.exports = function createStatsRouter({ logger }) {
         if (byStatusClass[cls] === undefined) byStatusClass[cls] = 0;
         byStatusClass[cls] += 1;
       }
+
+      byLevel[entry.level] = (byLevel[entry.level] || 0) + 1;
 
       // 按“路径去掉参数”聚合，否则每个平台/版本都会算成一条
       const key = entry.path || entry.url || 'unknown';
@@ -75,22 +82,31 @@ module.exports = function createStatsRouter({ logger }) {
     const sortedDurations = durations.slice().sort((a, b) => a - b);
     const sum = sortedDurations.reduce((acc, v) => acc + v, 0);
 
-    // 时间线：按 5 秒一格分桶，前端可以直接画折线
+    // 时间线：按 5 秒一格分桶，前端可以直接画折线。
+    //
+    // 用「相对窗口起点」算下标，而不是「相对现在倒推」。
+    // 原来写的是 `bucketCount - 1 - floor(offset / bucketMs)`，
+    // 对恰好落在窗口起点的那一条会算出 -1 被丢掉 —— 每一格 5 分钟的窗口
+    // 都会稳定丢失最旧的 5 秒数据，而且 timeline[0] 的时间戳就标着那一段。
     const bucketMs = 5000;
-    const bucketCount = Math.ceil((windowMinutes * 60_000) / bucketMs);
-    const now = Date.now();
+    const bucketCount = Math.max(1, Math.ceil((windowMinutes * 60_000) / bucketMs));
+
     const timeline = Array.from({ length: bucketCount }, (_, i) => {
-      const start = now - (bucketCount - i) * bucketMs;
+      const start = windowStart + i * bucketMs;
       return { at: new Date(start).toISOString(), count: 0, errors: 0, avgMs: 0, _sum: 0 };
     });
+
     for (const entry of requests) {
-      const offset = now - (entry.ts || 0);
-      const index = bucketCount - 1 - Math.floor(offset / bucketMs);
-      if (index < 0 || index >= bucketCount) continue;
+      const offset = (entry.ts || 0) - windowStart;
+      if (offset < 0) continue;
+      // 夹到最后一格：恰好等于 now 的那条会算出 bucketCount，越界
+      const index = Math.min(bucketCount - 1, Math.floor(offset / bucketMs));
       const slot = timeline[index];
       slot.count += 1;
       slot._sum += entry.durationMs || 0;
-      if (entry.status === null || entry.status >= 400) slot.errors += 1;
+      if (entry.status === null || entry.status === undefined || entry.status >= 400) {
+        slot.errors += 1;
+      }
     }
     for (const slot of timeline) {
       slot.avgMs = slot.count ? Math.round(slot._sum / slot.count) : 0;
@@ -111,10 +127,17 @@ module.exports = function createStatsRouter({ logger }) {
       windowMinutes,
       generatedAt: new Date().toISOString(),
       requests: {
+        // 注意：这里的 total 是**窗口内**的请求数，byLevel 也是窗口内的。
+        // 原来写的是 `{ total: requests.length, byStatusClass, ...logger.counts() }`，
+        // 而 logger.counts() 返回的是整个环形缓冲区的统计，展开后会把
+        // 窗口内的 total / byLevel 直接覆盖掉 —— 同一个响应里两个字段口径不同，
+        // 前端画图必然对不上（timeline 求和是窗口值，total 却是全局值）。
         total: requests.length,
         byStatusClass,
-        ...logger.counts(),
+        byLevel,
       },
+      // 全局（整个缓冲区）的口径单独放，名字上就区分开
+      lifetime: logger.counts(),
       latency: {
         avgMs: sortedDurations.length ? Math.round(sum / sortedDurations.length) : 0,
         p50Ms: percentile(sortedDurations, 50),

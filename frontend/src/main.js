@@ -17,7 +17,7 @@ import {
   initI18n, setLocale, getLocale, t,
 } from './locales/index.js'
 import {
-  state, bootstrap, on, loadControl,
+  state, bootstrap, on, loadControl, setState,
 } from './store.js'
 import { api } from './api.js'
 import { toastSuccess, reportError, toastWarn } from './ui/toast.js'
@@ -43,7 +43,6 @@ const ROUTES = {
 }
 
 const DEFAULT_ROUTE = 'dashboard'
-const ROUTE_COUNT = Object.keys(ROUTES).length
 
 /** @type {import('./views/common.js').View|null} */
 let currentView = null
@@ -135,11 +134,13 @@ function renderTopbar() {
 async function refreshStatus() {
   await Promise.all([
     api.health()
-      .then(() => { state.connected = true })
-      .catch(() => { state.connected = false }),
+      // 连通性只有这一个写入路径。控制类接口不受模拟影响，永远会成功，
+      // 拿它当连通性依据会让顶栏在断网时来回跳。
+      .then(() => setState({ connected: true }))
+      .catch(() => setState({ connected: false })),
     loadControl().catch(() => {
       // 控制接口也失败，说明后端是真的没起来
-      state.connected = false
+      setState({ connected: false })
     }),
   ])
 
@@ -153,7 +154,9 @@ function bindTopbar() {
       try {
         await api.control.disable()
         await loadControl()
-        if (currentView) await currentView.render()
+        // 用 refresh() 而不是 render()：render() 对 LogsView 会重开一条 SSE 流，
+        // 旧的那条永远不会关闭，同一批日志被推两遍。
+        if (currentView) await currentView.refresh()
         renderTopbar()
         toastSuccess(t('status.panicDone'))
       } catch (err) {
@@ -187,8 +190,10 @@ async function main() {
 
   const failures = await bootstrap()
 
-  // 后端整体不可用时给一次明确提示，而不是让每个页面各自报错
-  if (failures.length === ROUTE_COUNT) {
+  // 后端整体不可用时给一次明确提示，而不是让每个页面各自报错。
+  // 注意是 failed === total，不是和"路由数量"比 —— 原来拿失败数（最多 6）
+  // 去和路由数（7）比，条件永远不成立，这段提示是死代码。
+  if (failures.failed === failures.total) {
     toastWarn('后端没有响应，请确认服务器已启动（npm start）', 8000)
   }
 
@@ -217,4 +222,11 @@ main().catch((err) => {
 })
 
 // 供调试使用：在浏览器控制台里可以直接查看当前状态
-window.__HUS__ = { state, currentRoute }
+window.__HUS__ = {
+  state,
+  currentRoute,
+  stopPolling: () => {
+    if (statusTimer) clearInterval(statusTimer)
+    statusTimer = null
+  },
+}

@@ -96,7 +96,9 @@ class Logger extends EventEmitter {
    * @param {boolean} [filter.onlySimulated] 只看被模拟器干预过的请求
    */
   query(filter = {}) {
-    let list = this.entries;
+    // 一开始就复制一份。下面的 filter 每次都会新建数组，所以最后再补一次
+    // slice() 是多余的全量复制（2000 条时最坏要复制好几遍）。
+    let list = this.entries.slice();
 
     if (filter.level) {
       list = list.filter((e) => e.level === filter.level);
@@ -106,7 +108,7 @@ class Logger extends EventEmitter {
       list = list.filter((e) => e.ts > since);
     }
     if (filter.onlySimulated) {
-      list = list.filter((e) => e.sim && (e.sim.latencyMs || e.sim.fault || e.sim.throttled));
+      list = list.filter((e) => Logger.isSimulated(e));
     }
     if (filter.q) {
       const needle = String(filter.q).toLowerCase();
@@ -116,12 +118,25 @@ class Logger extends EventEmitter {
       });
     }
 
-    const limit = Number(filter.limit);
-    if (Number.isFinite(limit) && limit > 0) {
-      list = list.slice(-limit);
+    // limit 夹到缓冲上限，避免 ?limit=1e9 这种请求白白复制一遍整份缓冲
+    const raw = Number(filter.limit);
+    if (Number.isFinite(raw) && raw > 0) {
+      list = list.slice(-Math.min(Math.floor(raw), this.maxEntries));
     }
 
-    return list.slice();
+    return list;
+  }
+
+  /**
+   * 「这个请求是否被模拟器干预过」的**唯一**判定依据。
+   *
+   * 前端原来自己复制了一份判断，而且两边条件不一致（客户端算上了
+   * sim.dropped、服务端没算），于是被丢包掐断的条目在实时流里看得到、
+   * 一刷新历史就消失。这种语义只能有一处实现。
+   */
+  static isSimulated(entry) {
+    const sim = (entry && entry.sim) || {};
+    return Boolean(sim.latencyMs || sim.fault || sim.throttled || sim.dropped || sim.range);
   }
 
   /** 总条数与各级别条数。 */

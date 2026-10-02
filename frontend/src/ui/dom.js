@@ -80,13 +80,32 @@ export function statusBadge(status) {
 
 /**
  * 防抖。给输入框用，避免每敲一个字就发一次请求。
+ *
+ * 返回的函数带 `cancel()`：视图卸载时必须调它。只把引用置空
+ * （`this.saveDebounced = () => {}`）是没用的 —— 已经排队的那次 setTimeout
+ * 照样会执行，而那时视图的 container 已经被清空，回调里访问就会抛
+ * "Cannot read properties of null"。用户最后一次输入也被静默丢弃。
  */
 export function debounce(fn, wait = 300) {
   let timer = null
-  return function debounced(...args) {
+  function debounced(...args) {
     clearTimeout(timer)
-    timer = setTimeout(() => fn.apply(this, args), wait)
+    timer = setTimeout(() => {
+      timer = null
+      fn.apply(this, args)
+    }, wait)
   }
+  debounced.cancel = () => {
+    clearTimeout(timer)
+    timer = null
+  }
+  debounced.flush = (...args) => {
+    if (timer === null) return
+    clearTimeout(timer)
+    timer = null
+    fn.apply(this, args)
+  }
+  return debounced
 }
 
 /** 按节流间隔执行，用于高频事件（例如日志流里的批量渲染）。 */

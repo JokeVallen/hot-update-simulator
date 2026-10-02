@@ -187,6 +187,8 @@ export class NetworkView extends View {
 
   /** 保存到后端。后端会做越界夹取并把结果写回配置。 */
   async save() {
+    // 卸载之后不再发请求：防抖可能还排着一次，而那时 container 已经没了
+    if (!this.isActive() || !this.container) return
     const patch = this.collect()
     if (!Object.keys(patch).length) return
     await this.patch(patch, { flash: true })
@@ -270,7 +272,11 @@ export class NetworkView extends View {
   }
 
   destroy() {
-    // 把防抖函数置空，避免卸载后还有一次挂起的保存打回后端
+    // 必须真的取消排队中的那次防抖，而不是把引用置空 ——
+    // 置空拦不住已经排好的 setTimeout，它仍会执行并访问已清空的 container。
+    if (this.saveDebounced && typeof this.saveDebounced.cancel === 'function') {
+      this.saveDebounced.cancel()
+    }
     this.saveDebounced = () => {}
     super.destroy()
   }

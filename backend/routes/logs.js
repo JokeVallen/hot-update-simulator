@@ -7,6 +7,19 @@
 
 const express = require('express');
 
+/**
+ * 同时允许的 SSE 连接数上限。
+ *
+ * 每条连接都会常驻一个定时器、两个 logger 监听器和一个 socket，
+ * 而且原实现完全忽略 `res.write()` 的返回值 —— 客户端不读数据（TCP 零窗口）时，
+ * 服务端 socket 缓冲区会无上限堆积，这就是一个不需要认证的稳定内存耗尽手段。
+ */
+const MAX_STREAMS = 8;
+/** 反馈持续阻塞多久之后主动断开这条连接（毫秒）。 */
+const STALL_TIMEOUT_MS = 60_000;
+
+let activeStreams = 0;
+
 module.exports = function createLogRouter({ logger }) {
   const router = express.Router();
 
@@ -58,6 +71,12 @@ module.exports = function createLogRouter({ logger }) {
    *       200: { description: text/event-stream 流 }
    */
   router.get('/stream', (req, res) => {
+    if (activeStreams >= MAX_STREAMS) {
+      return res.status(503).json({
+        error: `实时日志连接数已达上限（${MAX_STREAMS}），请先关闭其它标签页`,
+      });
+    }
+
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
@@ -65,29 +84,69 @@ module.exports = function createLogRouter({ logger }) {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
+    activeStreams += 1;
+
+    /** 上次写出是否反馈了背压（false 表示下游跟不上）。 */
+    let backedUp = false;
+    let backedUpSince = 0;
+
     const send = (event, data) => {
       if (res.writableEnded) return;
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      try {
+        // 保留写的返回值：false 说明 socket 缓冲区满了，客户端没在读
+        const ok = res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        if (ok) {
+          backedUp = false;
+          backedUpSince = 0;
+        } else if (!backedUp) {
+          backedUp = true;
+          backedUpSince = Date.now();
+        }
+      } catch {
+        /* 连接已断 */
+      }
     };
 
     send('hello', { at: new Date().toISOString(), buffered: logger.counts() });
 
-    const onEntry = (entry) => send('entry', entry);
+    const onEntry = (entry) => {
+      // 已经堵住了就别继续往里塞，直接丢掉这条更新；
+      // 实时日志丢几条远好过把服务端内存吃光。
+      if (backedUp) return;
+      send('entry', entry);
+    };
     const onClear = (info) => send('clear', info);
 
     logger.on('entry', onEntry);
     logger.on('clear', onClear);
 
-    // 心跳：防止中间设备因为长时间没数据把连接掐掉
+    res.on('drain', () => {
+      backedUp = false;
+      backedUpSince = 0;
+    });
+
+    // 心跳：防止中间设备因为长时间没数据把连接掐掉。
+    // 同时兼作"卡死连接"的看门狗。
     const heartbeat = setInterval(() => {
       if (res.writableEnded) return;
-      res.write(': ping\n\n');
+      if (backedUp && Date.now() - backedUpSince > STALL_TIMEOUT_MS) {
+        // 反馈阻塞超过一分钟，说明客户端根本没在读，主动断开
+        clearInterval(heartbeat);
+        res.destroy();
+        return;
+      }
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        /* 连接已断 */
+      }
     }, 25_000);
 
     const cleanup = () => {
       clearInterval(heartbeat);
       logger.off('entry', onEntry);
       logger.off('clear', onClear);
+      activeStreams = Math.max(0, activeStreams - 1);
     };
 
     req.on('close', cleanup);

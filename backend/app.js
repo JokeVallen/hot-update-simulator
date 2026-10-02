@@ -45,6 +45,16 @@ const createSystemRouter = require('./routes/system');
 
 const app = express();
 
+// 关掉 Express 自动生成的 ETag。
+//
+// 两个理由：
+//   1. assetServer 自己按「大小 + 修改时间」算 ETag，那才是热更客户端需要
+//      的语义；Express 默认的 `W/"<长度>-<body 的 sha1>"` 会混在 304/416 这些
+//      不该带验证器的响应上（416 带着资源的 ETag 会让客户端误以为"这就是内容"）。
+//   2. 默认实现要对每个响应体算一次 SHA1，而这些响应本来就是一次性的。
+// express.static 用的是 serve-static 自己的 etag 选项，不受这里影响。
+app.set('etag', false);
+
 // ---------------------------------------------------------------- 核心实例
 
 const configPath = path.join(__dirname, 'config.json');
@@ -70,9 +80,55 @@ app.locals.logger = logger;
 
 const serverCfg = configManager.get('server');
 
-// 简单 CORS：浏览器端调试工具从别的源访问时不用再折腾代理
+/**
+ * 判断一个 Origin 是不是本机来源。
+ *
+ * 这是个只在本机跑的开发工具，唯一合法的跨源来源就是本机的另一个端口
+ * （开发模式下前端在 5173，通过代理或直连访问后端）。所以只要 hostname
+ * 是回环地址就放行，其余一律按跨站处理。
+ */
+function isLoopbackOrigin(origin) {
+  if (!origin) return false;
+  try {
+    const { hostname } = new URL(origin);
+    return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * CORS + 跨站请求防护。
+ *
+ * 原实现无条件回 `Access-Control-Allow-Origin: *`，而控制类接口又完全没有
+ * 认证 —— 结果是任何网页只要在用户浏览器里跑起来，就能
+ * `fetch('http://127.0.0.1:5500/api/logs')` **读到全部请求日志**，
+ * 也能 PATCH 掉模拟参数、甚至写入故障规则。
+ *
+ * 现在：
+ *   * 只有本机来源才会拿到 ACAO（跨站页面读不到响应）
+ *   * 带非本机 Origin 的状态变更请求（POST/PUT/PATCH/DELETE）直接 403
+ *     （简单请求也能挡住，不依赖 CORS 预检）
+ */
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.get('origin');
+
+  if (origin && !isLoopbackOrigin(origin)) {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      return res.status(403).json({
+        error: '拒绝跨站的状态变更请求：这个工具只允许本机来源操作',
+        origin,
+      });
+    }
+    // 读请求放行，但不回 ACAO —— 浏览器拿不到响应内容
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    return next();
+  }
+
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Range,If-None-Match,If-Modified-Since');
   res.setHeader(
@@ -213,14 +269,40 @@ app.use((req, res) => {
 });
 
 // 全局错误处理必须放在最后，且必须是四个参数
-// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  logger.log({ error: err.message, stack: err.stack, url: req.originalUrl, method: req.method });
-  if (!res.headersSent) {
-    res.status(500).json({ error: '服务器内部错误', detail: err.message });
-  } else {
+  logger.log({
+    error: err.message,
+    stack: err.stack,
+    url: req.originalUrl,
+    method: req.method,
+  });
+
+  if (res.headersSent) {
     res.destroy();
+    return;
   }
+
+  // 请求体解析失败是客户端的问题，不该报 500。
+  // 原来所有异常都被统一成 500 + "服务器内部错误"，客户端根本分不清
+  // 是自己发错了还是服务端崩了。
+  if (err.type === 'entity.parse.failed') {
+    res.status(400).json({ error: '请求体不是合法的 JSON' });
+    return;
+  }
+  if (err.type === 'entity.too.large') {
+    res.status(413).json({ error: '请求体过大（上限 2MB）' });
+    return;
+  }
+
+  // 绝不把 err.message 回给客户端：Node 的 fs 错误消息长这样
+  //   `ENOENT: no such file or directory, stat 'E:\...\storage\assets\...'`
+  // 等于把资产根目录、项目路径、磁盘结构一起告诉对方。
+  // 详细信息只进日志，客户端只拿到一个可关联的 id。
+  const detail = process.env.NODE_ENV === 'production' ? undefined : err.code;
+  res.status(err.status && err.status >= 400 && err.status < 600 ? err.status : 500).json({
+    error: '服务器内部错误',
+    ...(detail ? { code: detail } : {}),
+  });
 });
 
 module.exports = app;

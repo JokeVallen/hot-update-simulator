@@ -39,7 +39,7 @@ function findBrowser() {
   return null;
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
 /** 极简 CDP 客户端。 */
 class Cdp {
@@ -103,6 +103,25 @@ async function main() {
     process.exit(2);
   }
 
+  // 界面检查会点「急停」等按钮，那些操作会真的写进 backend/config.json。
+  // 跑完必须还原，否则每跑一次测试就把用户的模拟参数改一遍
+  // （这个坑真的踩到了：某次跑完 config.json 里留下了 bandwidthKbps=8000）。
+  const configPath = path.resolve(__dirname, '..', 'backend', 'config.json');
+  let originalConfig = null;
+  try {
+    originalConfig = fs.readFileSync(configPath, 'utf8');
+  } catch {
+    /* 没有配置文件也能跑 */
+  }
+  const restoreConfig = () => {
+    if (originalConfig === null) return;
+    try {
+      fs.writeFileSync(configPath, originalConfig, 'utf8');
+    } catch {
+      /* 忽略 */
+    }
+  };
+
   // 先确认目标服务在跑，否则后面全是超时，看不出真正原因
   try {
     const res = await fetch(`${TARGET_URL}/api/health`);
@@ -133,11 +152,23 @@ async function main() {
   const cleanup = () => {
     try { child.kill(); } catch { /* 已经退出 */ }
     try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    restoreConfig();
   };
 
-  let cdp = null;
+  /** 连接调试端口的客户端，在下面的 try 里赋值。 */
+  let cdp;
   const problems = [];
   const consoleErrors = [];
+
+  /** 断言辅助：失败时同时记进 problems，参与最后的汇总与退出码。 */
+  function check(name, condition, detail = '') {
+    if (condition) {
+      console.log(`  ✓ ${name}`);
+    } else {
+      console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`);
+      problems.push(`${name}${detail ? ` — ${detail}` : ''}`);
+    }
+  }
 
   try {
     // 等调试端口起来
@@ -288,6 +319,80 @@ async function main() {
     const navInfo = JSON.parse(navResult.result.value);
     const navOk = navInfo.hash === '#/presets' && navInfo.hasCards > 0;
     console.log(`${navOk ? '  ✓' : '  ✗'} 侧边导航切换正常（hash=${navInfo.hash}，方案卡片 ${navInfo.hasCards} 张）`);
+
+    // ---------------------------------------------------------- 故障规则编辑器
+    //
+    // 这一段是补上的：原来的界面检查只验证"路由能渲染"和三个按钮，
+    // 从没点过「新增规则」。而恰恰是这个按钮 100% 报错 ——
+    // bindEditor() 在编辑器 HTML 写入之前执行，querySelector 拿到 null
+    // 直接抛 TypeError，编辑器永远打不开。
+    console.log('\n故障规则编辑器');
+    await cdp.send('Runtime.evaluate', {
+      expression: `location.hash = '#/faults'`,
+      returnByValue: true,
+    });
+    await sleep(2000);
+
+    const beforeCount = problems.length;
+    // 点「新增规则」
+    await cdp.send('Runtime.evaluate', {
+      expression: `(document.querySelector('#faultAddRule') || {click(){}}).click()`,
+      returnByValue: true,
+    });
+    await sleep(1200);
+
+    const editorState = await cdp.send('Runtime.evaluate', {
+      expression: `JSON.stringify({
+        hasEditor: Boolean(document.querySelector('#faultEditor #feSave')),
+        hasName: Boolean(document.querySelector('#feName')),
+        hasType: Boolean(document.querySelector('#feType')),
+        hasCancel: Boolean(document.querySelector('#feCancel')),
+      })`,
+      returnByValue: true,
+    });
+    const editor = JSON.parse(editorState.result.value);
+    // 先算控制台报错的增量，再调用 check()（check 自己也会往 problems 里写）
+    const newProblems = problems.length - beforeCount;
+
+    check('点「新增规则」后编辑器出现', editor.hasEditor, JSON.stringify(editor));
+    check('编辑器各字段都在', editor.hasName && editor.hasType && editor.hasCancel, JSON.stringify(editor));
+    check('打开编辑器过程中没有控制台报错', newProblems === 0,
+      problems.slice(beforeCount).join(' / '));
+
+    // 改故障类型，确认相关字段的显示/隐藏与 disabled 生效
+    const typeSwitch = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const sel = document.querySelector('#feType');
+        if (!sel) return 'no-select';
+        sel.value = 'abort';
+        sel.dispatchEvent(new Event('change'));
+        const delayNode = document.querySelector('[data-when="delay"]');
+        const ratioNode = document.querySelector('[data-when="ratio"]');
+        const delayInput = delayNode ? delayNode.querySelector('input') : null;
+        const ratioInput = ratioNode ? ratioNode.querySelector('input') : null;
+        return JSON.stringify({
+          delayHidden: delayNode ? delayNode.classList.contains('d-none') : null,
+          delayDisabled: delayInput ? delayInput.disabled : null,
+          ratioHidden: ratioNode ? ratioNode.classList.contains('d-none') : null,
+          ratioDisabled: ratioInput ? ratioInput.disabled : null,
+        });
+      })()`,
+      returnByValue: true,
+    });
+    const typeInfo = JSON.parse(typeSwitch.result.value);
+    check('切到 abort 时延迟字段被隐藏并禁用（不会把看不见的值提交上去）',
+      typeInfo.delayHidden === true && typeInfo.delayDisabled === true,
+      JSON.stringify(typeInfo));
+    check('切到 abort 时比例字段可见且可用',
+      typeInfo.ratioHidden === false && typeInfo.ratioDisabled === false,
+      JSON.stringify(typeInfo));
+
+    // 关掉编辑器，避免把测试状态留下
+    await cdp.send('Runtime.evaluate', {
+      expression: `(document.querySelector('#feCancel') || {click(){}}).click()`,
+      returnByValue: true,
+    });
+    await sleep(500);
 
     // 每个路由都截一张图，方便人工看布局有没有问题
     const shotDir = path.resolve(__dirname, '..', 'ui-check-shots');

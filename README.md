@@ -54,11 +54,22 @@ npm run build                  # 或者构建成静态文件，由后端直接�
 ### 测试
 
 ```bash
-npm run smoke        # 后端端到端：把每种故障都真触发一遍（74 项断言）
+npm run lint         # ESLint（含复杂度预算：complexity / max-depth / max-lines）
+npm run smoke        # 后端端到端：74 项断言，每种故障都真的触发一遍
+npm run regression   # 边界与回归：49 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
 npm run ui-check     # 前端界面：无头 Chrome 走完 7 个路由，捕获控制台报错
 ```
 
 `ui-check` 需要 Chrome 或 Edge，会在 `ui-check-shots/` 下给每个页面留一张截图。
+跑完会自动还原 `backend/config.json`（测试会真的改动它）。
+
+### 安全边界
+
+控制类接口**没有认证**，默认只监听 `127.0.0.1`。要改成 `0.0.0.0` 给真机联调时，
+请清楚这等于把"读写模拟参数 + 读取全部请求日志"开放给整个局域网。
+跨站的状态变更请求会被拒绝，错误响应也不回传磁盘路径。
+
+详见 [使用手册的安全边界一节](backend/public/manual.md)。
 
 ---
 

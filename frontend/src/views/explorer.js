@@ -283,6 +283,8 @@ export class ExplorerView extends View {
       this.paintAssets()
       this.bindDownloads()
     } catch (err) {
+      // 清单拉不到是常见的（平台目录被删、命中故障规则），日志里留个痕迹方便排查
+      console.warn('[explorer] 拉取清单失败：', err.message)
       if (!this.isActive()) return
       this.manifest = null
       this.paintAssets()

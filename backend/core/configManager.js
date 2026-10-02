@@ -12,14 +12,21 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
+const faultRule = require('./faultRule');
 
 /**
  * 默认配置。config.json 里缺失的字段一律用这里的值补齐。
  */
 const DEFAULTS = {
   server: {
-    host: '0.0.0.0',
+    // 默认只监听回环地址。
+    //
+    // 控制类接口完全没有认证，而它们能读写模拟参数、注入故障规则、读全部
+    // 请求日志。绑到 0.0.0.0 就等于把这一切开放给同局域网的任何一台机器。
+    // 确实需要给手机/真机联调时，显式改成 0.0.0.0，并意识到这个风险。
+    host: '127.0.0.1',
     port: 5500,
     // 以下两个路径都是相对 backend/ 目录的
     publicDir: 'public',
@@ -52,7 +59,6 @@ const DEFAULTS = {
   },
   logging: {
     maxEntries: 2000,
-    logResponseBody: false,
   },
 };
 
@@ -138,14 +144,36 @@ class ConfigManager extends EventEmitter {
   }
 
   /**
-   * 校正非法值。AI 生成或手工编辑的配置很容易写出越界数字，
-   * 与其等运行时出现诡异行为，不如在这里统一夹到合法区间。
+   * 校正非法值。
+   *
+   * 这里的定位是**最后一道防线**：无论输入来自手工编辑的 config.json、
+   * API 请求体、还是预置方案，都必须收敛成一个合法结构，绝不能抛异常，
+   * 也不能把非法值原样放行。
+   *
+   * 为什么必须先做「节级对象化」：deepMerge 会把 `{fault: 'a string'}`
+   * 原样覆盖进去，紧接着 `c.fault.enabled = ...` 就会抛
+   * `TypeError: Cannot create property 'enabled' on string`。
+   * 实测后果是整个接口 500，而且那条预置方案之后永远无法应用。
    */
   sanitize(config) {
-    const c = deepMerge(DEFAULTS, config);
+    const input = isPlainObject(config) ? config : {};
+    const c = deepMerge(DEFAULTS, input);
+
+    // 每个配置节都必须是对象，否则回落成默认值
+    for (const section of Object.keys(DEFAULTS)) {
+      if (!isPlainObject(c[section])) {
+        c[section] = deepClone(DEFAULTS[section]);
+      }
+    }
+    // 嵌套的节同样要保证
+    if (!isPlainObject(c.hotUpdate.gray)) {
+      c.hotUpdate.gray = deepClone(DEFAULTS.hotUpdate.gray);
+    }
 
     c.server.port = Math.round(clamp(c.server.port, 1, 65535));
     c.server.host = String(c.server.host || DEFAULTS.server.host);
+    c.server.publicDir = String(c.server.publicDir || DEFAULTS.server.publicDir);
+    c.server.assetDir = String(c.server.assetDir || DEFAULTS.server.assetDir);
 
     c.network.enabled = Boolean(c.network.enabled);
     c.network.offline = Boolean(c.network.offline);
@@ -155,10 +183,26 @@ class ConfigManager extends EventEmitter {
     c.network.packetLossRate = clamp(c.network.packetLossRate, 0, 1);
 
     c.fault.enabled = Boolean(c.fault.enabled);
-    c.fault.rules = Array.isArray(c.fault.rules) ? c.fault.rules : [];
+    // 规则逐条校验。非法项被丢弃并记一条警告，而不是原样放行——
+    // 原实现里 status: 99999 会让 res.status() 抛 RangeError（注入变成真 500），
+    // probability: null 会让规则永远不触发（Number(null) === 0），
+    // type 拼错会静默降级成 500，使用者还以为规则生效了。
+    const normalized = faultRule.normalizeRules(c.fault.rules);
+    c.fault.rules = normalized.rules;
+    if (normalized.rejected.length) {
+      console.warn(
+        `[config] 有 ${normalized.rejected.length} 条故障规则不合法，已丢弃：`
+        + normalized.rejected.map((r) => `#${r.index} ${r.reason}`).join('；'),
+      );
+    }
 
     const channels = Array.isArray(c.hotUpdate.channels) ? c.hotUpdate.channels : [];
-    c.hotUpdate.channels = channels.length ? channels.map(String) : DEFAULTS.hotUpdate.channels.slice();
+    c.hotUpdate.channels = channels.length
+      ? channels.map(String).filter(Boolean)
+      : DEFAULTS.hotUpdate.channels.slice();
+    if (!c.hotUpdate.channels.length) {
+      c.hotUpdate.channels = DEFAULTS.hotUpdate.channels.slice();
+    }
     if (!c.hotUpdate.channels.includes(c.hotUpdate.defaultChannel)) {
       c.hotUpdate.defaultChannel = c.hotUpdate.channels[0];
     }
@@ -166,7 +210,6 @@ class ConfigManager extends EventEmitter {
     c.hotUpdate.gray.percent = clamp(c.hotUpdate.gray.percent, 0, 100);
 
     c.logging.maxEntries = Math.round(clamp(c.logging.maxEntries, 10, 100000));
-    c.logging.logResponseBody = Boolean(c.logging.logResponseBody);
 
     return c;
   }
@@ -250,7 +293,9 @@ class ConfigManager extends EventEmitter {
     }
 
     const dir = path.dirname(this.configPath);
-    const tmp = `${this.configPath}.tmp`;
+    // 临时文件名唯一：并发写用同一个名字时，先完成的那个 rename 会把
+    // 文件移走，后一个的 rename 就会失败（ENOENT），而失败是被吞掉的。
+    const tmp = `${this.configPath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(tmp, `${JSON.stringify(this.config, null, 2)}\n`, 'utf8');

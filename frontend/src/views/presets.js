@@ -99,7 +99,9 @@ export class PresetsView extends View {
         } catch (err) {
           reportError(err, t('toast.actionFailed'))
         } finally {
-          btn.disabled = false
+          // 应用方案后整页会重画，btn 已经脱离文档；
+          // 给已卸载的节点设 disabled 没有意义。
+          if (btn.isConnected) btn.disabled = false
         }
       })
     })

@@ -173,33 +173,43 @@ class AssetServer {
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
     const etag = AssetServer.etagFor(stat);
+    const lastModified = stat.mtime.toUTCString();
 
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('ETag', etag);
-    res.setHeader('Last-Modified', stat.mtime.toUTCString());
-    // 让客户端和中间的调试工具知道缓存该怎么处理
-    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-    // 便于在浏览器/抓包工具里确认到底下的是哪个版本
-    res.setHeader('X-Asset-Platform', String(platform));
-    res.setHeader('X-Asset-Size', String(stat.size));
-
-    // 协商缓存：内容没变就回 304，不传 body。
-    // 客户端如果能正确处理 304，就不会白下已经有的资源。
+    // ── 协商缓存 ──
+    //
+    // RFC 9110 §13.1.3：**只要请求带了 If-None-Match，就必须忽略
+    // If-Modified-Since**。原实现是「INM 不匹配就继续看 IMS」，
+    // 于是"过期 ETag + 同一秒的 IMS"会拿到 304 —— 客户端认为资源没变，
+    // 继续用旧的 AssetBundle；续传请求（Range）更会被 304 直接卡死。
     const ifNoneMatch = req.headers['if-none-match'];
-    if (ifNoneMatch && ifNoneMatch.split(',').map((s) => s.trim()).includes(etag)) {
-      res.status(304).end();
-      return undefined;
-    }
-    const ifModifiedSince = req.headers['if-modified-since'];
-    if (ifModifiedSince) {
-      const since = Date.parse(ifModifiedSince);
-      if (Number.isFinite(since) && Math.floor(stat.mtimeMs / 1000) * 1000 <= since) {
+    const hasINM = Boolean(ifNoneMatch);
+
+    if (hasINM) {
+      const candidates = String(ifNoneMatch).split(',').map((s) => s.trim());
+      // "*" 表示"只要资源存在就别回 body"
+      if (candidates.includes('*') || candidates.includes(etag)) {
+        res.setHeader('ETag', etag);
+        res.setHeader('Last-Modified', lastModified);
         res.status(304).end();
         return undefined;
       }
+      // 不匹配：按规范忽略 IMS，继续往下走
+    } else {
+      const ifModifiedSince = req.headers['if-modified-since'];
+      if (ifModifiedSince) {
+        const since = Date.parse(ifModifiedSince);
+        // Last-Modified 只有秒级精度，比较前先把 mtime 截到秒，否则
+        // 同一秒内的文件会因为毫秒部分而被判定成"已修改"
+        if (Number.isFinite(since) && Math.floor(stat.mtimeMs / 1000) * 1000 <= since) {
+          res.setHeader('ETag', etag);
+          res.setHeader('Last-Modified', lastModified);
+          res.status(304).end();
+          return undefined;
+        }
+      }
     }
 
-    // Range 断点续传
+    // ── Range ──
     const range = req.headers.range;
     let start = 0;
     let end = stat.size - 1;
@@ -208,8 +218,10 @@ class AssetServer {
     if (range) {
       const parsed = AssetServer.parseRange(range, stat.size);
       if (parsed === null) {
-        // 语法对但范围不可满足，按 HTTP 规范回 416
+        // 语法合法但不可满足，或有我们明确拒绝的形式（多段、溢出数字）。
+        // 416 不应携带该资源的验证器 —— 否则客户端会以为"这就是资源内容"。
         res.setHeader('Content-Range', `bytes */${stat.size}`);
+        res.setHeader('Accept-Ranges', 'bytes');
         res.status(416).type('text/plain; charset=utf-8').send('请求的字节范围不可满足');
         return undefined;
       }
@@ -222,9 +234,27 @@ class AssetServer {
       }
     }
 
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', lastModified);
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    res.setHeader('Accept-Ranges', 'bytes');
+    // 便于在浏览器/抓包工具里确认到底下的是哪个版本
+    res.setHeader('X-Asset-Platform', String(platform));
+    res.setHeader('X-Asset-Size', String(stat.size));
+
+    // 0 字节文件是合法的空资源（上传中断留下的空包就长这样）。
+    // 原实现会算出 end = size - 1 = -1，createReadStream 同步抛
+    // ERR_OUT_OF_RANGE，冒泡到全局错误处理器变成 500 并把磁盘绝对路径
+    // 回给客户端。而"空包"恰恰是模拟器最该支持的一类畸形资源。
+    if (stat.size === 0) {
+      res.setHeader('Content-Length', '0');
+      res.end();
+      return undefined;
+    }
+
     const length = end - start + 1;
     res.setHeader('Content-Length', String(length));
-    res.setHeader('Accept-Ranges', 'bytes');
     if (req._sim) req._sim.range = partial ? `${start}-${end}` : undefined;
 
     if (req.method === 'HEAD') {
@@ -232,14 +262,27 @@ class AssetServer {
       return undefined;
     }
 
-    const stream = fs.createReadStream(filePath, { start, end });
-    stream.on('error', (err) => {
-      // 文件在读到一半时被删/被占用，头已经发出去了就只能断开了
+    let stream;
+    try {
+      stream = fs.createReadStream(filePath, { start, end });
+    } catch (err) {
+      // statSync 和 createReadStream 之间文件可能被删掉（TOCTOU）
       if (!res.headersSent) {
-        res.status(500).type('text/plain; charset=utf-8').send(`读取资源失败：${err.message}`);
+        res.status(404).type('text/plain; charset=utf-8').send(`资源已不可读：${err.code || err.message}`);
       } else {
         res.destroy();
       }
+      return undefined;
+    }
+
+    stream.on('error', (err) => {
+      // 文件读到一半被删/被占用，头已经发出去了就只能断开
+      if (!res.headersSent) {
+        res.status(500).type('text/plain; charset=utf-8').send('读取资源失败');
+      } else {
+        res.destroy();
+      }
+      if (req._sim) req._sim.streamError = err.code || err.message;
     });
     stream.pipe(res);
     return undefined;
@@ -247,57 +290,118 @@ class AssetServer {
 
   /**
    * 解析 Range 头。
+   *
    * @returns {{start:number,end:number}|null|undefined}
-   *   对象 = 有效的范围；null = 语法合法但不可满足（回 416）；undefined = 不支持/忽略
+   *   对象 = 有效范围；null = 明确拒绝（回 416）；undefined = 语法非法，忽略该头
+   *
+   * 返回值里同时夹紧了 end，避免把超范围的值写进 Content-Range
+   * （实测 `bytes=0-9e99` 会把 9000000000000000000 原样写进响应头）。
    */
   static parseRange(header, size) {
-    const match = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim());
-    if (!match) return undefined;
+    const raw = String(header).trim();
+    if (!raw.toLowerCase().startsWith('bytes=')) return undefined;
 
+    const spec = raw.slice(6).trim();
+
+    // 多段 Range（bytes=0-10,20-30）本服务不支持。必须**明确拒绝**，
+    // 不能像原来那样走"忽略"分支——那会让客户端收到整份文件，
+    // 于是"断点续传"看起来成功了，其实下的是全量。
+    if (spec.includes(',')) return null;
+
+    const match = /^(\d*)-(\d*)$/.exec(spec);
+    if (!match) return undefined; // 语法非法，按 RFC 允许直接忽略
     const [, rawStart, rawEnd] = match;
     if (rawStart === '' && rawEnd === '') return undefined;
+
+    /** 只接受非负安全整数；超出安全范围的数字一律拒绝。 */
+    const parseSafe = (value) => {
+      if (value === '') return undefined;
+      const n = Number(value);
+      if (!Number.isSafeInteger(n) || n < 0) return null;
+      return n;
+    };
 
     let start;
     let end;
 
     if (rawStart === '') {
       // bytes=-500 表示最后 500 字节
-      const suffix = Number(rawEnd);
-      if (!Number.isFinite(suffix) || suffix <= 0) return null;
+      const suffix = parseSafe(rawEnd);
+      if (suffix === null) return null;
+      if (suffix === undefined || suffix <= 0) return null;
       start = Math.max(0, size - suffix);
       end = size - 1;
     } else {
-      start = Number(rawStart);
-      end = rawEnd === '' ? size - 1 : Number(rawEnd);
+      const parsedStart = parseSafe(rawStart);
+      if (parsedStart === null) return null;
+      start = parsedStart;
+
+      const parsedEnd = parseSafe(rawEnd);
+      if (parsedEnd === null) return null;
+      end = parsedEnd === undefined ? size - 1 : parsedEnd;
     }
 
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
     if (start > end || start >= size) return null;
 
+    // 在返回前就夹紧，保证调用方拿到的 end 永远是合法上界
     return { start, end: Math.min(end, size - 1) };
   }
 
   /**
-   * 扫描平台目录，生成 manifest。
+   * 扫描平台目录，生成 manifest（异步）。
    *
-   * 两个来源：
-   *   1. 如果 {平台}/manifest.json 存在，读取它拿 version / forceUpdate / notice 等元信息；
-   *      如果它同时提供了 files 数组，就直接用那份清单（适合手工精确控制）。
+   * 为什么是异步：原实现用 `fs.readFileSync` 把**整个文件**读进内存算 md5，
+   * 并对整个目录递归调用。两个后果都很严重：
+   *   1. 几个 GB 的热更包在缓存过期后的第一次请求里直接 OOM；
+   *   2. 全程同步，事件循环被完全堵住 —— 连本应"永不被拖慢"的控制面板
+   *      都会一起卡死，恰好破坏了 app.js 里那条刻意的设计保证。
+   * 现在改成流式分块计算，并限制并发打开的流数量。
+   *
+   * 两个数据来源：
+   *   1. 如果 {平台}/manifest.json 存在，读取它拿 version / forceUpdate / notice；
+   *      如果它同时提供了 files 数组，就直接用那份清单。
    *   2. 否则递归扫描目录，现算每个文件的大小和 md5。
-   *
-   * 这样“直接把打好的包丢进目录”和“用脚本生成精确 manifest”两种用法都支持。
    *
    * @param {string} platform
    * @param {object} [options]
    * @param {boolean} [options.useCache=true]
+   * @returns {Promise<object|null>}
    */
-  buildManifest(platform, options = {}) {
+  async buildManifest(platform, options = {}) {
     const useCache = options.useCache !== false;
+
     const cached = this.manifestCache.get(platform);
-    if (useCache && cached && Date.now() - cached.at < MANIFEST_TTL_MS) {
-      return cached.data;
+    if (useCache && cached) {
+      // 缓存里既可能是已经算好的结果，也可能是"正在算"的 Promise。
+      // 后者用于合并并发请求，避免同一个平台被同时扫描好几遍——
+      // 这种在途状态无视 TTL，必须等它出结果。
+      const inFlight = typeof cached.data === 'object' && cached.data !== null
+        && typeof cached.data.then === 'function';
+      if (inFlight || Date.now() - cached.at < MANIFEST_TTL_MS) {
+        return cached.data;
+      }
     }
 
+    const pending = this._buildManifestUncached(platform);
+    this.manifestCache.set(platform, { at: Date.now(), data: pending });
+
+    let manifest;
+    try {
+      manifest = await pending;
+    } catch (err) {
+      this.manifestCache.delete(platform);
+      throw err;
+    }
+
+    if (!manifest) {
+      this.manifestCache.delete(platform);
+      return null;
+    }
+    this.manifestCache.set(platform, { at: Date.now(), data: manifest });
+    return manifest;
+  }
+
+  async _buildManifestUncached(platform) {
     const root = this.root();
     const platformDir = this.safeResolve(root, platform);
     if (!platformDir || !fs.existsSync(platformDir)) {
@@ -309,13 +413,12 @@ class AssetServer {
     const metaPath = path.join(platformDir, 'manifest.json');
     if (fs.existsSync(metaPath)) {
       try {
-        meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        meta = JSON.parse(await fs.promises.readFile(metaPath, 'utf8'));
       } catch (err) {
         meta = { _warning: `manifest.json 解析失败：${err.message}` };
       }
     }
 
-    // 如果 manifest.json 里写死了文件清单，就尊重它
     let files;
     if (Array.isArray(meta.files) && meta.files.length) {
       files = meta.files.map((f) => ({
@@ -325,7 +428,8 @@ class AssetServer {
         url: f.url || `/assets/${encodeURIComponent(platform)}/${String(f.path || '').replace(/\\/g, '/')}`,
       }));
     } else {
-      files = AssetServer.scanDirectory(platformDir).map((f) => ({
+      files = await AssetServer.scanDirectory(platformDir);
+      files = files.map((f) => ({
         ...f,
         url: `/assets/${encodeURIComponent(platform)}/${f.path.split('/').map(encodeURIComponent).join('/')}`,
       }));
@@ -348,8 +452,6 @@ class AssetServer {
       files,
     };
     if (meta._warning) manifest.warning = meta._warning;
-
-    this.manifestCache.set(platform, { at: Date.now(), data: manifest });
     return manifest;
   }
 
@@ -359,44 +461,77 @@ class AssetServer {
     else this.manifestCache.clear();
   }
 
-  /** 递归扫描目录，返回 [{path, size, hash}]，path 用正斜杠且相对平台目录。 */
-  static scanDirectory(dir, base = dir) {
+  /**
+   * 递归扫描目录（异步），返回 [{path, size, hash}]，path 用正斜杠且相对平台目录。
+   *
+   * 用并发上限而不是 Promise.all 全放出去：一个平台目录下可能有上万个文件，
+   * 同时打开上万个读流会把文件句柄耗尽。
+   */
+  static async scanDirectory(dir, base = dir, concurrency = 4) {
     const out = [];
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return out;
-    }
 
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        out.push(...AssetServer.scanDirectory(full, base));
-      } else if (entry.isFile()) {
-        try {
-          const stat = fs.statSync(full);
-          out.push({
-            path: path.relative(base, full).split(path.sep).join('/'),
-            size: stat.size,
-            hash: AssetServer.md5File(full),
-          });
-        } catch {
-          // 单个文件读不了就跳过，不让整个 manifest 挂掉
-        }
+    const walk = async (current) => {
+      let entries;
+      try {
+        entries = await fs.promises.readdir(current, { withFileTypes: true });
+      } catch {
+        return;
       }
-    }
+
+      const subdirs = [];
+      const files = [];
+      for (const entry of entries) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) subdirs.push(full);
+        else if (entry.isFile()) files.push(full);
+      }
+
+      // 文件按并发上限分批处理
+      for (let i = 0; i < files.length; i += concurrency) {
+        const batch = files.slice(i, i + concurrency);
+        const results = await Promise.all(batch.map(async (full) => {
+          try {
+            const stat = await fs.promises.stat(full);
+            return {
+              path: path.relative(base, full).split(path.sep).join('/'),
+              size: stat.size,
+              hash: await AssetServer.md5File(full),
+            };
+          } catch {
+            // 单个文件读不了就跳过，不让整个 manifest 挂掉
+            return null;
+          }
+        }));
+        for (const item of results) if (item) out.push(item);
+      }
+
+      for (const sub of subdirs) {
+        await walk(sub);
+      }
+    };
+
+    await walk(dir);
     return out;
   }
 
+  /**
+   * 流式计算文件 md5。
+   * 绝不 readFileSync —— 那会把整个文件读进内存，并同步阻塞事件循环。
+   */
   static md5File(filePath) {
-    try {
+    return new Promise((resolve) => {
       const hash = crypto.createHash('md5');
-      hash.update(fs.readFileSync(filePath));
-      return hash.digest('hex');
-    } catch {
-      return null;
-    }
+      let stream;
+      try {
+        stream = fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 });
+      } catch {
+        resolve(null);
+        return;
+      }
+      stream.on('data', (chunk) => hash.update(chunk));
+      stream.on('error', () => resolve(null));
+      stream.on('end', () => resolve(hash.digest('hex')));
+    });
   }
 
   /**

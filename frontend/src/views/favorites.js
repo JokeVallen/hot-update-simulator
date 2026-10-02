@@ -105,14 +105,27 @@ export class FavoritesView extends View {
   }
 
   bind() {
-    this.container.querySelector('#favAdd').addEventListener('click', async () => {
+    this.bindForm()
+    this.bindList()
+  }
+
+  /**
+   * 表单部分的事件只绑一次（#favAdd 在 render() 时创建）。
+   * 列表重画时**不能**再调这个，否则会叠加第二个监听 ——
+   * 一次点击会发出多个 POST，建出好几条一模一样的收藏。
+   */
+  bindForm() {
+    const addBtn = this.container.querySelector('#favAdd')
+    if (!addBtn) return
+
+    addBtn.addEventListener('click', async () => {
       const name = this.container.querySelector('#favName').value.trim()
       const url = this.container.querySelector('#favUrl').value.trim()
       const method = this.container.querySelector('#favMethod').value
       const body = this.container.querySelector('#favBody').value.trim()
 
       if (!name || !url) {
-        reportError(new Error(`${t('common.name')} / URL`), t('toast.actionFailed'))
+        reportError(new Error('名称和 URL 都是必填的'), t('toast.actionFailed'))
         return
       }
 
@@ -126,7 +139,10 @@ export class FavoritesView extends View {
         reportError(err, t('toast.actionFailed'))
       }
     })
+  }
 
+  /** 只绑列表里的事件。列表每次重画都要重新绑一遍。 */
+  bindList() {
     this.container.querySelectorAll('[data-fav-replay]').forEach((btn) => {
       btn.addEventListener('click', () => this.replay(btn.dataset.favReplay))
     })
@@ -147,13 +163,19 @@ export class FavoritesView extends View {
     })
   }
 
+  /** 只重画列表区域，保留用户在左侧表单里已经填好的内容。 */
+  repaintList() {
+    const host = this.container.querySelector('#favList')
+    if (!host) return
+    host.innerHTML = this.listHtml(state.favorites || [])
+    this.bindList()
+  }
+
   async replay(id) {
     this.replaying.add(id)
-    if (this.isActive()) {
-      const host = this.container.querySelector('#favList')
-      if (host) host.innerHTML = this.listHtml(state.favorites || [])
-      this.bind()
-    }
+    // 只重画列表：整个 render() 会把用户正在填的表单清空
+    // （实测：填好名称/URL/Body 后点一下重放，回来全没了）
+    if (this.isActive()) this.repaintList()
 
     try {
       const result = await api.favorites.replay(id)
@@ -169,7 +191,7 @@ export class FavoritesView extends View {
       reportError(new Error(message), t('favorites.replay'))
     } finally {
       this.replaying.delete(id)
-      if (this.isActive()) this.render()
+      if (this.isActive()) this.repaintList()
     }
   }
 

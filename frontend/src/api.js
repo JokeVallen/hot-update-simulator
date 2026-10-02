@@ -22,30 +22,75 @@ export class ApiError extends Error {
 }
 
 /**
+ * 默认请求超时。
+ *
+ * 这个前端**必须**有超时：后端的主要功能之一就是模拟"服务器不响应"，
+ * 命中 timeout 故障时请求会永远不 settle。没有超时的话，接口调试页的
+ * 「响应」卡片会一直停在转圈上，只能刷新页面才能恢复。
+ */
+const DEFAULT_TIMEOUT_MS = 15000
+/** 下载资产可能很慢（限速 100Kbps 下 10MB 要 13 分钟），单独放宽。 */
+export const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
+
+/**
  * 发一个请求。
  * @param {string} path 形如 /api/control
  * @param {object} [options]
  * @param {string} [options.method]
  * @param {object} [options.body] 会被 JSON 序列化
  * @param {object} [options.headers]
+ * @param {AbortSignal} [options.signal] 外部取消信号
+ * @param {number} [options.timeoutMs] 超时毫秒数，0 表示不限
  */
 async function request(path, options = {}) {
-  const { method = 'GET', body, headers = {}, signal } = options
+  const {
+    method = 'GET',
+    body,
+    headers = {},
+    signal,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  } = options
 
-  const init = { method, headers: { ...headers }, signal }
+  const init = { method, headers: { ...headers } }
 
   if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(body)
   }
 
+  // 把「超时」和「调用方主动取消」统一到一个 controller 上
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = timeoutMs > 0
+    ? setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+    : null
+
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+  init.signal = controller.signal
+
   let res
   try {
     res = await fetch(BASE + path, init)
   } catch (err) {
+    if (timedOut) {
+      throw new ApiError(
+        `请求超过 ${(timeoutMs / 1000).toFixed(0)} 秒没有响应（很可能命中了 timeout 故障规则）`,
+        { cause: err },
+      )
+    }
+    if (err.name === 'AbortError') {
+      // 调用方主动取消，不算错误，交给上层按取消处理
+      const abortErr = new ApiError('请求已取消', { cause: err })
+      abortErr.cancelled = true
+      throw abortErr
+    }
     // 连不上后端，或者请求被模拟器掐断了
-    if (err.name === 'AbortError') throw err
     throw new ApiError('无法连接到后端服务，请确认服务器正在运行', { cause: err })
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 
   // 204 和 304 没有响应体

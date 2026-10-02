@@ -15,7 +15,7 @@ import { t } from '../locales/index.js'
 import { api } from '../api.js'
 import { reportError, toastSuccess } from '../ui/toast.js'
 import {
-  esc, fmtBytes, fmtDuration, fmtTime, statusBadge,
+  esc, fmtBytes, fmtDuration, fmtTime, statusBadge, debounce,
 } from '../ui/dom.js'
 import { View, pageHeader, card, emptyState } from './common.js'
 
@@ -93,8 +93,16 @@ export class LogsView extends View {
 
     await this.loadHistory()
     this.bind()
-    this.startStream()
     this.paint(true)
+  }
+
+  /**
+   * SSE 连接在这里建立，而不是 render() 里。
+   * render() 会被 refresh() 反复调用（比如点急停），每次调都开一条新流
+   * 会让旧连接泄漏、同一批日志被推两遍。
+   */
+  async setup() {
+    this.startStream()
   }
 
   /** 按当前筛选条件从服务端拉一次历史。 */
@@ -126,6 +134,16 @@ export class LogsView extends View {
         // 日志被清空（可能是别的客户端干的）
         this.entries = []
         this.scheduleRender()
+      },
+      () => {
+        // SSE 断了：EventSource 会自己重连，但界面必须如实反映"现在不是跟随状态"，
+        // 否则会一直显示"跟随中"却在悄悄丢日志（原来没传这个回调）。
+        if (!this.isActive()) return
+        const badge = this.container.querySelector('#logFollowState')
+        if (badge) {
+          badge.textContent = t('logs.paused')
+          badge.className = 'badge text-bg-warning ms-1'
+        }
       },
     )
     this.addCleanup(() => {
@@ -160,15 +178,15 @@ export class LogsView extends View {
 
   bind() {
     const search = this.container.querySelector('#logSearch')
-    let searchTimer = null
-    search.addEventListener('input', () => {
-      clearTimeout(searchTimer)
-      searchTimer = setTimeout(async () => {
-        this.filters.q = search.value.trim()
-        await this.loadHistory()
-        if (this.isActive()) this.paint(true)
-      }, 350)
-    })
+    // 防抖函数存在实例上，destroy() 里才能 cancel 掉。
+    // 原来是闭包局部变量，卸载后仍会发一次 /api/logs 请求。
+    this.searchDebounced = debounce(async () => {
+      if (!this.isActive()) return
+      this.filters.q = search.value.trim()
+      await this.loadHistory()
+      if (this.isActive()) this.paint(true)
+    }, 350)
+    search.addEventListener('input', () => this.searchDebounced())
 
     this.container.querySelector('#logLevel').addEventListener('change', async (evt) => {
       this.filters.level = evt.target.value
@@ -265,6 +283,9 @@ export class LogsView extends View {
     if (this.renderTimer) {
       clearTimeout(this.renderTimer)
       this.renderTimer = null
+    }
+    if (this.searchDebounced && typeof this.searchDebounced.cancel === 'function') {
+      this.searchDebounced.cancel()
     }
     if (this.closeStream) {
       this.closeStream()

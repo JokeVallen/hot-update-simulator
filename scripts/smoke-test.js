@@ -74,7 +74,7 @@ function request(port, urlPath, options = {}) {
   });
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
 function md5(buffer) {
   return crypto.createHash('md5').update(buffer).digest('hex');
@@ -100,7 +100,7 @@ async function main() {
   });
 
   const server = app.listen(port);
-  await new Promise((resolve) => server.once('listening', resolve));
+  await new Promise((resolve) => { server.once('listening', resolve); });
   console.log(`测试服务器已启动：http://127.0.0.1:${port}`);
 
   try {
@@ -540,7 +540,6 @@ async function main() {
     // ------------------------------------------------------------ 配置持久化
     section('配置持久化');
 
-    const cfgBefore = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     await request(port, '/api/control/network', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

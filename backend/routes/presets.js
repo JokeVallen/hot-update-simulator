@@ -24,7 +24,9 @@ function rule(id, name, type, match, action = {}) {
     match: {
       method: match.method || 'GET',
       pathPrefix: match.pathPrefix || '',
-      pathRegex: match.pathRegex || '',
+      // 用 glob 而不是正则：任意正则会被用在每个请求的匹配上，
+      // 一个灾难性回溯的模式就能把单线程的 Node 挂死（详见 core/faultRule.js）
+      pathGlob: match.pathGlob || '',
       platform: match.platform || '',
     },
     action: {
