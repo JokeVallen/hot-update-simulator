@@ -125,7 +125,7 @@ export class FavoritesView extends View {
       const body = this.container.querySelector('#favBody').value.trim()
 
       if (!name || !url) {
-        reportError(new Error('名称和 URL 都是必填的'), t('toast.actionFailed'))
+        reportError(new Error(t('errors.nameUrlRequired')), t('toast.actionFailed'))
         return
       }
 

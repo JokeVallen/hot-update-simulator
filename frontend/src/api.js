@@ -11,6 +11,10 @@
 
 const BASE = ''
 
+// 面向用户的错误文案走语言包。api.js 依赖 locales 是单向的
+// （locales 不反过来依赖 api），不会形成环。
+import { t } from './locales/index.js'
+
 export class ApiError extends Error {
   constructor(message, { status = null, body = null, cause = null } = {}) {
     super(message)
@@ -76,19 +80,16 @@ async function request(path, options = {}) {
     res = await fetch(BASE + path, init)
   } catch (err) {
     if (timedOut) {
-      throw new ApiError(
-        `请求超过 ${(timeoutMs / 1000).toFixed(0)} 秒没有响应（很可能命中了 timeout 故障规则）`,
-        { cause: err },
-      )
+      throw new ApiError(t('errors.timeout', { s: Math.round(timeoutMs / 1000) }), { cause: err })
     }
     if (err.name === 'AbortError') {
       // 调用方主动取消，不算错误，交给上层按取消处理
-      const abortErr = new ApiError('请求已取消', { cause: err })
+      const abortErr = new ApiError(t('errors.cancelled'), { cause: err })
       abortErr.cancelled = true
       throw abortErr
     }
     // 连不上后端，或者请求被模拟器掐断了
-    throw new ApiError('无法连接到后端服务，请确认服务器正在运行', { cause: err })
+    throw new ApiError(t('errors.networkDown'), { cause: err })
   } finally {
     if (timer) clearTimeout(timer)
   }
@@ -110,7 +111,9 @@ async function request(path, options = {}) {
   }
 
   if (!res.ok) {
-    const message = (data && data.error) || (typeof data === 'string' && data) || `请求失败（HTTP ${res.status}）`
+    const message = (data && data.error)
+      || (typeof data === 'string' && data)
+      || t('errors.requestFailed', { status: res.status })
     throw new ApiError(message, { status: res.status, body: data })
   }
 

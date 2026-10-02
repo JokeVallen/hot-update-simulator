@@ -26,10 +26,11 @@ export function statCard(label, value, sub = '') {
     </div>`
 }
 
-/** 带标题的卡片容器。 */
-export function card(title, bodyHtml, extraClass = '') {
+/** 带标题的卡片容器。给 id 是为了让视图能稳定地定位到它—— */
+/** 靠 DOM 顺序或类名组合去找元素，布局一改就静默失效。 */
+export function card(title, bodyHtml, extraClass = '', id = '') {
   return `
-    <div class="hus-card ${extraClass}">
+    <div class="hus-card ${extraClass}"${id ? ` id="${esc(id)}"` : ''}>
       ${title ? `<div class="hus-card-title">${esc(title)}</div>` : ''}
       ${bodyHtml}
     </div>`
@@ -53,7 +54,7 @@ export function prettyJson(value, maxChars = 20000) {
   }
   if (!text) return ''
   if (text.length > maxChars) {
-    return `${text.slice(0, maxChars)}\n\n…（内容过长，已截断，共 ${text.length} 字符）`
+    return `${text.slice(0, maxChars)}\n\n${t('errors.truncated', { n: text.length })}`
   }
   return text
 }

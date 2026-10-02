@@ -32,6 +32,7 @@
     "search": "搜索",
     "confirmDelete": "确定要删除吗？此操作不可撤销。",
     "seconds": "秒",
+    "minutes": "分钟",
     "unlimited": "不限速",
     "yes": "是",
     "no": "否"
@@ -93,7 +94,8 @@
     "estimate": "下载 10MB 预计耗时",
     "saved": "网络参数已保存并立即生效",
     "resetDone": "网络参数已恢复默认",
-    "quick": "快捷设置"
+    "quick": "快捷设置",
+    "quickWeak": "弱网"
   },
   "faults": {
     "title": "故障注入",
@@ -213,6 +215,8 @@
     "file": "文件",
     "hash": "MD5",
     "download": "下载",
+    "downloading": "下载中…",
+    "downloadTimeout": "超过 {s} 秒仍未完成（很可能命中了 timeout 故障）",
     "downloadDone": "下载完成：{size}，耗时 {ms}",
     "downloadFailed": "下载失败：{message}",
     "noPlatform": "还没有任何平台。先执行 npm run sample 生成示例资源，再把热更包放进资产目录。",
@@ -239,6 +243,17 @@
     "created": "收藏已添加",
     "deleted": "收藏已删除",
     "empty": "还没有收藏。去「接口调试」里调一次接口，然后把它存下来。"
+  },
+  "errors": {
+    "networkDown": "无法连接到后端服务，请确认服务器正在运行",
+    "backendDown": "后端没有响应，请确认服务器已启动（npm start）",
+    "timeout": "请求超过 {s} 秒没有响应（很可能命中了 timeout 故障规则）",
+    "cancelled": "请求已取消",
+    "requestFailed": "请求失败（HTTP {status}）",
+    "nameUrlRequired": "名称和 URL 都是必填的",
+    "truncated": "…（内容过长，已截断，共 {n} 字符）",
+    "disconnected": "断连",
+    "disconnectedHint": "连接被掐断，客户端只会看到网络错误"
   },
   "toast": {
     "saved": "已保存",

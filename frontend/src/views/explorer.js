@@ -6,7 +6,7 @@
 // 把延迟调到 3 秒，然后在这里点一下"查询版本"，就能亲眼看到耗时变了。
 
 import { t } from '../locales/index.js'
-import { api } from '../api.js'
+import { api, DOWNLOAD_TIMEOUT_MS } from '../api.js'
 import { state, loadPlatforms, setState } from '../store.js'
 import { reportError, toastSuccess } from '../ui/toast.js'
 import { esc, fmtBytes, fmtDuration, statusBadge } from '../ui/dom.js'
@@ -20,6 +20,8 @@ export class ExplorerView extends View {
     this.busy = false
     /** 上次下载测试的结果，按文件路径索引 */
     this.downloads = new Map()
+    /** 在途的下载：url -> AbortController，用于去重和中止 */
+    this.downloadAborters = new Map()
     /** 当前平台的清单 */
     this.manifest = null
   }
@@ -36,12 +38,12 @@ export class ExplorerView extends View {
           ${card(t('explorer.params'), this.formHtml(platforms, platform))}
         </div>
         <div class="col-12 col-xl-7">
-          ${card(t('explorer.result'), this.resultHtml())}
+          ${card(t('explorer.result'), this.resultHtml(), '', 'expResultCard')}
         </div>
       </div>
 
       <div class="mt-3">
-        ${card(t('explorer.assets'), this.assetsHtml())}
+        ${card(t('explorer.assets'), this.assetsHtml(), '', 'expAssetsCard')}
       </div>`
 
     this.bind()
@@ -297,27 +299,54 @@ export class ExplorerView extends View {
    * 注意浏览器里拿不到 MD5（WebCrypto 不支持 MD5），所以这里只能比对
    * 字节数。内容是否损坏要靠客户端自己做 md5 校验——这正是
    * corrupt 故障想要逼出来的东西。
+   *
+   * 三件事必须做，否则命中 timeout 故障时这一页就废了：
+   *   1. 超时（用 AbortController）—— 否则请求永不 settle，一直转圈
+   *   2. 同一文件不允许并发重复下载 —— 否则连点会并行拉好几份
+   *   3. 视图卸载时中止在途请求 —— 否则切走页面后它还在占带宽
    */
   async testDownload(url, expectedSize) {
+    const key = decodeURIComponent(url).replace(/^\/assets\/[^/]+\//, '')
+
+    if (this.downloadAborters.has(url)) return // 已经在下了，忽略重复点击
+
+    const controller = new AbortController()
+    this.downloadAborters.set(url, controller)
+
     const started = Date.now()
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, DOWNLOAD_TIMEOUT_MS)
+
+    // 先把"下载中"画出来，让使用者知道点到了
+    this.downloads.set(key, { ok: null, text: t('explorer.downloading') })
+    if (this.isActive()) {
+      this.paintAssets()
+      this.bindDownloads()
+    }
+
     try {
-      const res = await fetch(url)
+      const res = await fetch(url, { signal: controller.signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const blob = await res.blob()
       const ms = Date.now() - started
       const ok = blob.size === expectedSize
 
-      this.downloads.set(
-        decodeURIComponent(url).replace(/^\/assets\/[^/]+\//, ''),
-        {
-          ok,
-          text: `${fmtBytes(blob.size)} / ${fmtDuration(ms)}${ok ? '' : ' ⚠'}`,
-        },
-      )
+      this.downloads.set(key, {
+        ok,
+        text: `${fmtBytes(blob.size)} / ${fmtDuration(ms)}${ok ? '' : ' ⚠'}`,
+      })
     } catch (err) {
-      const key = decodeURIComponent(url).replace(/^\/assets\/[^/]+\//, '')
-      // 下载失败多半是命中了 abort/断网，这本身就是预期结果
-      this.downloads.set(key, { ok: false, text: `✗ ${err.message}` })
+      // 下载失败多半是命中了 abort/断网/超时，这本身就是预期结果
+      const reason = timedOut
+        ? t('explorer.downloadTimeout', { s: Math.round(DOWNLOAD_TIMEOUT_MS / 1000) })
+        : (err && err.message ? err.message : String(err))
+      this.downloads.set(key, { ok: false, text: `✗ ${reason}` })
+    } finally {
+      clearTimeout(timer)
+      this.downloadAborters.delete(url)
     }
 
     if (!this.isActive()) return
@@ -326,19 +355,26 @@ export class ExplorerView extends View {
   }
 
   paintResult() {
-    const right = this.container.querySelector('.col-12.col-xl-7 .hus-card')
-    if (!right) return
-    right.innerHTML = `<div class="hus-card-title">${esc(t('explorer.result'))}</div>${this.resultHtml()}`
+    // 用稳定的 id 定位，而不是 `.col-12.col-xl-7 .hus-card` 这种
+    // 依赖 DOM 结构的写法 —— 那种选择器在布局调整后会静默失效
+    // （面板从此不再更新且不报任何错）。
+    const node = this.container.querySelector('#expResultCard')
+    if (!node) return
+    node.innerHTML = `<div class="hus-card-title">${esc(t('explorer.result'))}</div>${this.resultHtml()}`
   }
 
   paintAssets() {
-    const cards = this.container.querySelectorAll('.hus-card')
-    const last = cards[cards.length - 1]
-    if (!last) return
-    last.innerHTML = `<div class="hus-card-title">${esc(t('explorer.assets'))}</div>${this.assetsHtml()}`
+    const node = this.container.querySelector('#expAssetsCard')
+    if (!node) return
+    node.innerHTML = `<div class="hus-card-title">${esc(t('explorer.assets'))}</div>${this.assetsHtml()}`
   }
 
   destroy() {
+    // 中止所有在途下载：切走页面后不该还占着带宽和服务端连接
+    for (const controller of this.downloadAborters.values()) {
+      try { controller.abort() } catch { /* 已经结束 */ }
+    }
+    this.downloadAborters.clear()
     this.result = null
     this.manifest = null
     this.downloads.clear()

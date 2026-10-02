@@ -194,7 +194,7 @@ async function main() {
   // 注意是 failed === total，不是和"路由数量"比 —— 原来拿失败数（最多 6）
   // 去和路由数（7）比，条件永远不成立，这段提示是死代码。
   if (failures.failed === failures.total) {
-    toastWarn('后端没有响应，请确认服务器已启动（npm start）', 8000)
+    toastWarn(t('errors.backendDown'), 8000)
   }
 
   // 任何状态变化都刷新顶栏和侧栏底部

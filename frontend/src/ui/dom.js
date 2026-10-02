@@ -5,6 +5,8 @@
 // 最重要的一条约定：**凡是要插进 HTML 的动态内容，必须过 esc()**。
 // 日志里的 URL、故障规则的名字都是用户可控的，直接拼字符串就是 XSS。
 
+import { t } from '../locales/index.js'
+
 /**
  * 转义 HTML 特殊字符。
  * 拼 innerHTML 之前，所有来自后端的字符串都要先过这里。
@@ -69,7 +71,8 @@ export function fmtTime(ts) {
 /** 把状态码渲染成带颜色的徽章。status 为 null 表示连接被掐断。 */
 export function statusBadge(status) {
   if (status === null || status === undefined) {
-    return '<span class="badge text-bg-dark" title="连接被掐断，客户端只会看到网络错误">断连</span>'
+    return `<span class="badge text-bg-dark" title="${esc(t('errors.disconnectedHint'))}">`
+      + `${esc(t('errors.disconnected'))}</span>`
   }
   const cls = status >= 500 ? 'text-bg-danger'
     : status >= 400 ? 'text-bg-warning'

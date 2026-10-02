@@ -14,11 +14,12 @@ import { esc, debounce } from '../ui/dom.js'
 import { View, pageHeader, card } from './common.js'
 
 /** 常用档位，一键填好。数值按运营商口径（千比特每秒）。 */
+/** WiFi/4G/3G 是各语言通用的，只有"弱网"需要翻译，所以用 labelKey。 */
 const QUICK_SETS = [
   { key: 'wifi', label: 'WiFi', latencyMs: 20, jitterMs: 5, bandwidthKbps: 20000, packetLossRate: 0 },
   { key: '4g', label: '4G', latencyMs: 150, jitterMs: 60, bandwidthKbps: 2000, packetLossRate: 0 },
   { key: '3g', label: '3G', latencyMs: 400, jitterMs: 150, bandwidthKbps: 400, packetLossRate: 0 },
-  { key: 'weak', label: '弱网', latencyMs: 1200, jitterMs: 500, bandwidthKbps: 100, packetLossRate: 0.05 },
+  { key: 'weak', labelKey: 'network.quickWeak', latencyMs: 1200, jitterMs: 500, bandwidthKbps: 100, packetLossRate: 0.05 },
 ]
 
 const FIELDS = [
@@ -81,7 +82,7 @@ export class NetworkView extends View {
             <div class="d-flex flex-wrap gap-2">
               ${QUICK_SETS.map((q) => `
                 <button class="btn btn-sm btn-outline-primary" data-quick="${esc(q.key)}">
-                  ${esc(q.label)}
+                  ${esc(q.labelKey ? t(q.labelKey) : q.label)}
                 </button>`).join('')}
             </div>
             <hr>

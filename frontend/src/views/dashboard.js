@@ -31,7 +31,7 @@ export class DashboardView extends View {
         <div class="btn-group btn-group-sm" id="dashWindow">
           ${WINDOWS.map((m) => `
             <button type="button" class="btn btn-outline-secondary ${m === this.windowMinutes ? 'active' : ''}"
-              data-window="${m}">${m} ${esc(t('common.seconds')) === 's' ? 'min' : '分钟'}</button>
+              data-window="${m}">${m} ${esc(t('common.minutes'))}</button>
           `).join('')}
         </div>
         <button class="btn btn-sm btn-outline-secondary ms-auto" id="dashRefresh">

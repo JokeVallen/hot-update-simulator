@@ -420,10 +420,17 @@ async function main() {
     // initI18n() 也就不会重跑，语言根本切不过去。
     await cdp.send('Page.navigate', { url: `${TARGET_URL}/?ui-check=locale#/dashboard` });
     await sleep(2800);
-
     const localeResult = await cdp.send('Runtime.evaluate', {
       expression: `(() => {
-        const zones = [document.getElementById('husSidebar'), document.querySelector('.hus-topbar')];
+        // 连主视图一起扫：只查侧栏和顶栏会漏掉页面内部的硬编码
+        // （比如统计窗口的"分钟"、网络页的"弱网"档位）。
+        // 这里停在 dashboard 路由上，它的内容全是前端文案 + ASCII 数据
+        // （路径、数字），不会有后端返回的中文造成误报。
+        const zones = [
+          document.getElementById('husSidebar'),
+          document.querySelector('.hus-topbar'),
+          document.getElementById('husView'),
+        ];
         const found = [];
         for (const zone of zones) {
           if (!zone) continue;

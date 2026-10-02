@@ -56,8 +56,10 @@ npm run build                  # 或者构建成静态文件，由后端直接�
 ```bash
 npm run lint         # ESLint（含复杂度预算：complexity / max-depth / max-lines）
 npm run smoke        # 后端端到端：74 项断言，每种故障都真的触发一遍
-npm run regression   # 边界与回归：49 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
+npm run regression   # 边界与回归：53 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
 npm run ui-check     # 前端界面：无头 Chrome 走完 7 个路由，捕获控制台报错
+npm run soak         # 稳定性：400 个混合请求，检查内存是否稳定、结束后是否仍可用
+npm run arch         # 结构：循环依赖 / 分层方向 / 孤儿模块 / 规模分布
 ```
 
 `ui-check` 需要 Chrome 或 Edge，会在 `ui-check-shots/` 下给每个页面留一张截图。

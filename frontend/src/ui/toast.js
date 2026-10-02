@@ -8,6 +8,7 @@
 // 免得依赖 Bootstrap 的 JS 实例管理。
 
 import { esc } from './dom.js'
+import { t } from '../locales/index.js'
 
 let container = null
 
@@ -42,7 +43,7 @@ export function toast(message, variant = 'info', timeoutMs = 3500) {
   node.innerHTML = `
     <div class="d-flex">
       <div class="toast-body">${esc(message)}</div>
-      <button type="button" class="btn-close btn-close-white me-2 m-auto" aria-label="关闭"></button>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" aria-label="${esc(t('common.close'))}"></button>
     </div>`
 
   node.querySelector('.btn-close').addEventListener('click', () => node.remove())

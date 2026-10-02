@@ -32,6 +32,7 @@
     "search": "Search",
     "confirmDelete": "Delete this? This cannot be undone.",
     "seconds": "s",
+    "minutes": "min",
     "unlimited": "Unlimited",
     "yes": "Yes",
     "no": "No"
@@ -93,7 +94,8 @@
     "estimate": "Estimated time for 10MB",
     "saved": "Network settings saved and applied",
     "resetDone": "Network settings reset to defaults",
-    "quick": "Quick set"
+    "quick": "Quick set",
+    "quickWeak": "Weak"
   },
   "faults": {
     "title": "Fault Injection",
@@ -213,6 +215,8 @@
     "file": "File",
     "hash": "MD5",
     "download": "Download",
+    "downloading": "Downloading…",
+    "downloadTimeout": "Not finished after {s}s (likely a timeout fault)",
     "downloadDone": "Downloaded {size} in {ms}",
     "downloadFailed": "Download failed: {message}",
     "noPlatform": "No platforms yet. Run npm run sample to generate sample assets, then drop your packages into the asset directory.",
@@ -239,6 +243,17 @@
     "created": "Favorite added",
     "deleted": "Favorite deleted",
     "empty": "No favorites yet. Make a call in API Console, then save it here."
+  },
+  "errors": {
+    "networkDown": "Cannot reach the backend — make sure the server is running",
+    "backendDown": "Backend is not responding — make sure it is running (npm start)",
+    "timeout": "No response after {s}s (likely a timeout fault rule)",
+    "cancelled": "Request cancelled",
+    "requestFailed": "Request failed (HTTP {status})",
+    "nameUrlRequired": "Name and URL are both required",
+    "truncated": "… (content too long, truncated; {n} chars total)",
+    "disconnected": "Dropped",
+    "disconnectedHint": "Connection was killed; the client only sees a network error"
   },
   "toast": {
     "saved": "Saved",

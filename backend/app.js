@@ -152,15 +152,26 @@ app.use('/api/stats', createStatsRouter({ logger }));
 app.use('/api/system', createSystemRouter({ configManager, assetServer }));
 
 // --------------------------------------- 以下开始受网络模拟 / 故障注入影响
+//
+// 关键：模拟管线**只挂在「游戏客户端会请求的那两类路径」上**，不是全局挂载。
+//
+// 原来写的是 app.use(requestPipeline(...))，全局生效。但面板自己的静态资源
+// （/web/*.js、/）也在 Express 的路由表里，于是它们会被一起延迟、截断、损坏：
+// 用户建一条不填匹配条件的规则（意思是"全都坏"，很容易这么写），刷新页面后
+// 面板再也加载不出来 —— 而"关掉故障注入"的按钮恰好就在那个面板里。
+// 实测：catch-all 的 abort 规则把 /web/index-*.js 从 347KB 砍到 173KB 并中断连接。
+//
+// 这是本文件开头那条设计原则的延伸：控制面板不能被自己模拟坏。
+// 所以模拟范围就等于「客户端会拉的东西」：热更业务接口 + 资产下载。
 
-app.use(requestPipeline({ networkSimulator, faultInjector }));
+const simulationPipeline = requestPipeline({ networkSimulator, faultInjector });
 
-app.use('/api', createApiRouter({ configManager, assetServer }));
+app.use('/api', simulationPipeline, createApiRouter({ configManager, assetServer }));
 
 // 资产下载：把 URL 拆成 { 平台, 剩余路径 } 再交给 AssetServer。
 // 这里手动解析而不是用通配路由，是为了避开不同 Express 版本
 // 通配符语法（*、*name、{*name}）的差异。
-app.use('/assets', (req, res) => {
+app.use('/assets', simulationPipeline, (req, res) => {
   const parts = req.path.split('/').filter(Boolean);
   if (!parts.length) {
     return res.status(400).type('text/plain; charset=utf-8')

@@ -563,6 +563,43 @@ async function testAssetEdgeCases() {
       badType.status === 400 || (badType.status === 201 && JSON.parse(badType.body.toString()).rule.action.type === 'status'),
       `实际状态 ${badType.status}`);
     await clearFaults(port);
+
+    // ---------------- 模拟范围：不能把控制面板自己搞坏 ----------------
+    section('模拟的作用范围');
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', {
+      name: 'catch-all',
+      // 什么都不填 = 匹配所有路径。这是使用者最自然的写法（"全都坏"）。
+      match: { method: '', pathPrefix: '', pathGlob: '', platform: '' },
+      action: { type: 'abort', ratio: 0.5 },
+    });
+    await postJson(port, '/api/control/fault', { enabled: true }, 'PATCH');
+
+    // 面板自己的静态资源必须**不受影响**，否则刷新页面就再也进不来了，
+    // 而"关掉故障注入"的按钮恰好就在那个进不来的页面里。
+    const shell = await request(port, '/');
+    check('catch-all 规则下首页仍然完整（面板不能把自己弄坏）',
+      shell.status === 200 && !shell.error && shell.body.length > 200,
+      `状态 ${shell.status}, ${shell.body.length} 字节, err=${shell.error}`);
+
+    const webAsset = await request(port, '/web/nonexistent-but-must-not-be-aborted.js');
+    check('catch-all 规则不会作用于 /web/* 静态资源路径',
+      webAsset.status === 404 && !webAsset.error,
+      `状态 ${webAsset.status}, err=${webAsset.error}（若是 ABORTED 说明被模拟管线截住了）`);
+
+    // 业务接口仍然应该被模拟 —— 修范围不能修过头
+    const stillSimulated = await request(port, '/api/health');
+    check('catch-all 规则对业务接口依然生效（范围收窄没修过头）',
+      Boolean(stillSimulated.error) || stillSimulated.body.length < 100,
+      `状态 ${stillSimulated.status}, ${stillSimulated.body.length} 字节, err=${stillSimulated.error}`);
+
+    // 控制接口必须始终可用：这是唯一的自救通道
+    const rescue = await request(port, '/api/control');
+    check('catch-all 规则下控制接口依然可用（自救通道）',
+      rescue.status === 200 && !rescue.error,
+      `状态 ${rescue.status}, err=${rescue.error}`);
+
+    await clearFaults(port);
   } finally {
     try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     await clearFaults(port).catch(() => {});
