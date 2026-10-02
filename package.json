@@ -12,7 +12,8 @@
     "smoke": "node scripts/smoke-test.js",
     "regression": "node scripts/regression-test.js",
     "lint": "eslint .",
-    "ui-check": "node scripts/ui-check.js"
+    "ui-check": "node scripts/ui-check.js",
+    "arch": "node scripts/arch-report.js"
   },
   "keywords": [
     "hot-update",
