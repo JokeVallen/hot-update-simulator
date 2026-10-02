@@ -11,7 +11,12 @@
 const { performance } = require('perf_hooks');
 
 /** 全部故障类型。单一事实来源，别处一律从这里派生。 */
-const FAULT_TYPES = ['status', 'timeout', 'slowHeader', 'abort', 'truncate', 'corrupt', 'empty'];
+const FAULT_TYPES = [
+  'status', 'timeout', 'slowHeader',
+  'abort', 'truncate', 'corrupt',
+  'slowThenAbort',
+  'empty',
+];
 
 /**
  * 每种故障类型会用到哪些 action 字段。
@@ -25,6 +30,9 @@ const ACTION_FIELDS = {
   abort: ['ratio'],
   truncate: ['ratio'],
   corrupt: ['ratio'],
+  // 唯一的复合类型：先把响应头拖慢，再在传输中途掐断。
+  // 它同时需要 delayMs 和 ratio，所以两个字段都要显示。
+  slowThenAbort: ['delayMs', 'ratio'],
   empty: [],
 };
 

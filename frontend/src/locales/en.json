@@ -151,6 +151,7 @@
       "abort": "Abort connection mid-download",
       "truncate": "Length mismatch (ends early)",
       "corrupt": "Corrupt content (correct length)",
+      "slowThenAbort": "Slow response, then abort mid-transfer (combo)",
       "empty": "Return an empty body"
     },
     "typeHints": {
@@ -160,6 +161,7 @@
       "abort": "The connection is killed partway through. This is the key scenario for testing resume (Range) support.",
       "truncate": "A full length is declared but less data is sent, then the response closes normally. Clients report a length mismatch.",
       "corrupt": "The length is exactly right but the content is damaged. Only a client that checks md5 will notice — one that doesn't will \"succeed\" and blow up later at unpack or runtime.",
+      "slowThenAbort": "Wait out the delay, then kill the connection mid-download. This reproduces the most realistic production failure chain: the client waits too long, times out, retries — and the retry dies partway through. Both the delay and the ratio apply.",
       "empty": "Returns 200 with an empty body, for making sure empty files and empty manifests don't crash the client."
     }
   },

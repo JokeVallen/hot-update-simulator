@@ -124,6 +124,10 @@ const BUILTIN_EN = {
     name: 'Weak link + abort (combo)',
     description: 'Weak 3G stacked with a mid-download abort. What the real internet looks like — use it for final robustness sign-off.',
   },
+  'slow-then-abort': {
+    name: 'Slow response, then abort (composite)',
+    description: 'Headers delayed 5s, then the connection is killed mid-download. Reproduces the most common production failure chain: wait too long → retry → the retry dies partway. No single rule can express this combination.',
+  },
 };
 
 /**
@@ -143,6 +147,7 @@ const RULE_EN = {
   'manifest-empty': { name: 'Empty manifest' },
   'slow-version': { name: 'Slow version headers' },
   'combo-abort': { name: 'Abort under a weak link' },
+  'slow-then-abort-rule': { name: 'Slow response, then abort' },
 };
 
 /**
@@ -357,6 +362,20 @@ const BUILTIN_PRESETS = [
       enabled: true,
       rules: [
         rule('combo-abort', '弱网下的资产断流', 'abort', { pathPrefix: '/assets' }, { ratio: 0.5 }),
+      ],
+    },
+  },
+  {
+    id: 'slow-then-abort',
+    name: '慢响应后断流（复合）',
+    description: '响应头拖 5 秒，再在下载中途掐断。还原最常见的线上失败链路：等太久 → 超时重试 → 重试时又断。单条规则表达不了这个组合。',
+    builtin: true,
+    network: NO_NETWORK,
+    fault: {
+      enabled: true,
+      rules: [
+        rule('slow-then-abort-rule', '慢响应后断流', 'slowThenAbort',
+          { pathPrefix: '/assets' }, { delayMs: 5000, ratio: 0.5 }),
       ],
     },
   },

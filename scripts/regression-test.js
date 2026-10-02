@@ -385,6 +385,32 @@ async function testResponseRewriting() {
       !chCorrupt.body.equals(Buffer.alloc(FULL, 0x41)),
       '收到的是完整原始内容，说明损坏没有生效');
 
+    // ---------------- slowThenAbort：延迟与断流必须同时生效 ----------------
+    //
+    // 这是唯一的复合类型，它必须同时做到两件事：先把响应拖慢，再在传输中途掐断。
+    // 只做到一件（delayMs 被丢掉、或者 shape 没装上）都是坏的，
+    // 而两种坏法都不报错 —— 只有量出来的数字能分辨。
+    clearFaults();
+    addRule({
+      id: 'r7',
+      name: 'slow-then-abort',
+      match: { pathPrefix: '/single' },
+      action: { type: 'slowThenAbort', delayMs: 600, ratio: 0.5 },
+    });
+
+    const stStarted = Date.now();
+    const stRes = await request(port, '/single');
+    const stMs = Date.now() - stStarted;
+
+    check('slowThenAbort：延迟确实生效（至少等了 600ms）',
+      stMs >= 600, `耗时 ${stMs}ms —— 小于 600 说明 delayMs 在处理时被丢掉了`);
+    check('slowThenAbort：断流也确实生效（只收到约一半）',
+      stRes.body.length >= FULL * 0.3 && stRes.body.length < FULL * 0.7,
+      `收到 ${stRes.body.length} / ${FULL} 字节`);
+    check('slowThenAbort：和普通 abort 区分得开（不能退化成纯延迟）',
+      stRes.body.length < FULL * 0.7 && stMs >= 600,
+      `字节 ${stRes.body.length}，耗时 ${stMs}ms`);
+
     // ---------------- 流式 + truncate 精度（不能超发一个 chunk） ----------------
     clearFaults();
     addRule({ id: 'r5', name: 'chunked-truncate-exact', match: { pathPrefix: '/chunked' }, action: { type: 'truncate', ratio: 0.4 } });

@@ -64,8 +64,8 @@ Once `http://localhost:5500/` is open (run `npm run build` first), the left side
 |---|---|
 | **Overview** | Start here. Beyond request counts and latency percentiles, the important part is the "Simulation impact" column — it tells you **how many requests the simulator tampered with**. Otherwise a 10-second P95 looks like a backend performance problem when you're the one who dialed the latency up |
 | **Network Simulation** | Tune latency / jitter / bandwidth / packet loss / offline. Changes apply immediately; there is no Save to click |
-| **Faults** | Add rules. The right-hand side spells out which client capability each of the 7 fault types tests, so you don't have to guess which one to pick |
-| **Presets** | The most used page. 16 scenarios, one click each; most of the time you never tune parameters by hand |
+| **Faults** | Add rules. The right-hand side spells out which client capability each of the 8 fault types tests, so you don't have to guess which one to pick |
+| **Presets** | The most used page. 17 scenarios, one click each; most of the time you never tune parameters by hand |
 | **Live Logs** | Every request is tagged with what was done to it: `abort`, `+300ms`, `100Kbps`, `Range`… Requests that were killed show "Dropped" in the status column |
 | **API Console** | Verify on the spot: call `/api/version` once and see whether the timing really changed |
 | **Favorites** | Save frequently used requests and replay them over and over. Replay is issued by the server, so it goes through the simulator in full |
@@ -173,10 +173,18 @@ that is exactly the `Weak link + abort (combo)` preset.
 | `abort` | The connection is reset halfway through the download | Resume (Range) |
 | `truncate` | A full length is declared but the body ends early | Content length validation |
 | `corrupt` | **The download succeeds but the content is bad** | Whether md5 is actually verified |
+| `slowThenAbort` | Stalls for a long time, then dies halfway through the download | The full "timeout, retry, and the retry dies" chain |
 | `empty` | 200 with an empty body | Empty files and empty manifests must not crash |
 
 `corrupt` is the one people overlook most: a client that doesn't verify hashes "succeeds" the whole way,
 then blows up at unpack or at runtime, which is extremely expensive to track down. Run it early.
+
+`slowThenAbort` is the only **composite type**. A single rule can express one action, but the most
+common production failure chain has two stages: the client waits too long → it times out and retries →
+the retry dies partway through. This type uses both `delayMs` and `ratio`, reproducing both stages at once.
+Other combinations (say "corrupt, then truncate") are not supported: that would mean splitting faults into
+an orchestratable chain of atoms, which costs far more than it returns and invites configurations that
+look valid but do nothing (see the design discussion in the repo).
 
 ### maxHits: Building "Fail the First N Times"
 
@@ -219,8 +227,8 @@ and `?` matches a single character. For example `/assets/**/*.ab`, `/api/version
 | `type` | all | The fault type, from the table above |
 | `status` | `status` | Status code to return, 100–599 |
 | `body` | `status` | Custom response body; leave it empty for a default notice |
-| `ratio` | `abort` `truncate` `corrupt` | How much of the data to act on, 0.01–1 |
-| `delayMs` | `slowHeader` | How long to delay the headers; defaults to 3000 ms |
+| `ratio` | `abort` `truncate` `corrupt` `slowThenAbort` | How much of the data to act on, 0.01–1 |
+| `delayMs` | `slowHeader` `slowThenAbort` | How long to delay the headers; defaults to 3000 ms |
 
 `ratio` is the least obvious one — it decides how deep the damage goes.
 With `ratio: 0.5`:
@@ -230,6 +238,7 @@ With `ratio: 0.5`:
 | `abort` | The connection is killed halfway through; the client must re-download or resume |
 | `truncate` | Half is sent, then the response ends cleanly, while `Content-Length` still claims the full length |
 | `corrupt` | Length is unchanged; the middle half of the bytes is flipped (only verification notices) |
+| `slowThenAbort` | Stalls for `delayMs` first, then aborts at the halfway point like `abort` |
 
 Fields that do not apply to the current `type` are **ignored**: the backend only reads
 the relevant ones, and the panel's rule editor hides and disables the rest so you cannot

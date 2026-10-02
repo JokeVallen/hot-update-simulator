@@ -215,6 +215,27 @@ class FaultInjector {
       return plan;
     }
 
+    // 复合类型：先把响应拖慢，再在传输中途掐断。
+    //
+    // 为什么单独加这一个而不是做通用编排：真实外网里最常见的一类失败就是
+    // "客户端等太久 → 超时重试 → 重试时又在下载中途断掉"，而单条规则
+    // 只能表达其中一半。完整的原子化编排要动 responseShaper 的核心
+    // （单值 mode 会变成 transform 链），成本 500~800 行且会引入
+    // "配得出来但语义无效"的组合。这一个类型精确覆盖了那个真实场景，
+    // 代价只有下面这段。
+    //
+    // 注意它**不需要改 requestPipeline**：plan 本来就同时支持 delayMs 和 shape
+    // （delayMs 在 next() 之前 await，shape 随后装到响应上）。
+    if (type === 'slowThenAbort') {
+      plan.delayMs = Number(action.delayMs) || 0;
+      if (!plan.delayMs) plan.delayMs = 3000;
+      sim.faultDelayMs = plan.delayMs;
+      plan.shape = { mode: 'abort', ratio: Number(action.ratio) || 0.5 };
+      // 日志和面板上要看得出这是"先慢后断"，而不是一个普通的 abort
+      sim.fault = 'slowThenAbort';
+      return plan;
+    }
+
     return plan;
   }
 

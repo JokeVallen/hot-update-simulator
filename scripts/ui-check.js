@@ -327,6 +327,11 @@ async function main() {
     const navInfo = JSON.parse(navResult.result.value);
     const navOk = navInfo.hash === '#/presets' && navInfo.hasCards > 0;
     console.log(`${navOk ? '  ✓' : '  ✗'} 侧边导航切换正常（hash=${navInfo.hash}，方案卡片 ${navInfo.hasCards} 张）`);
+    // 方案数量是"文档说的"和"界面上的"必须一致的那类数字：
+    // 手册里写着 17 个场景，这里就该是 17 张卡片。
+    check('预置方案的卡片数与手册一致（17 张）',
+      navInfo.hasCards === 17,
+      `实际 ${navInfo.hasCards} 张 —— 加了新方案要同步改手册里的数量`);
 
     // 顶栏的连接状态必须很快就有结论。
     // 原来的实现只挂了 5 秒轮询、从没在初始化时探过一次，

@@ -12,7 +12,10 @@ import { reportError, toastSuccess } from '../ui/toast.js'
 import { esc } from '../ui/dom.js'
 import { View, pageHeader, card, emptyState } from './common.js'
 
-const FAULT_TYPES = ['status', 'timeout', 'slowHeader', 'abort', 'truncate', 'corrupt', 'empty']
+// 和 backend/core/faultRule.js 的 FAULT_TYPES 必须一致。
+// 前后端是两个独立的包，没法直接共享这个常量，只能靠这条注释和
+// docs-check / 冒烟测试兜底 —— 加了新类型记得两边都改。
+const FAULT_TYPES = ['status', 'timeout', 'slowHeader', 'abort', 'truncate', 'corrupt', 'slowThenAbort', 'empty']
 const METHODS = ['', 'GET', 'POST', 'PUT', 'DELETE']
 
 export class FaultsView extends View {
@@ -87,7 +90,7 @@ export class FaultsView extends View {
     const actionParts = [`${action.type}`]
     if (action.type === 'status') actionParts.push(`→ ${action.status}`)
     if (action.delayMs) actionParts.push(`+${action.delayMs}ms`)
-    if (['abort', 'truncate', 'corrupt'].includes(action.type)) actionParts.push(`ratio=${action.ratio}`)
+    if (['abort', 'truncate', 'corrupt', 'slowThenAbort'].includes(action.type)) actionParts.push(`ratio=${action.ratio}`)
     if (rule.probability !== undefined && Number(rule.probability) < 1) {
       actionParts.push(`p=${rule.probability}`)
     }
@@ -366,6 +369,8 @@ export class FaultsView extends View {
       abort: ['ratio'],
       truncate: ['ratio'],
       corrupt: ['ratio'],
+      // 复合类型：延迟和比例都要显示
+      slowThenAbort: ['delay', 'ratio'],
       empty: [],
     }[type] || []
 
