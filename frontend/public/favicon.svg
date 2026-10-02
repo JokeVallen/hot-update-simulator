@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="12" fill="#14171c"/>
+  <!-- 两条首尾相接的弧线，表示"循环更新" -->
+  <path d="M20 26a14 14 0 0 1 23-6" fill="none" stroke="#4c8dff" stroke-width="5"
+        stroke-linecap="round"/>
+  <path d="M44 38a14 14 0 0 1-23 6" fill="none" stroke="#38d39f" stroke-width="5"
+        stroke-linecap="round"/>
+  <path d="M43 12l1 9-9-1z" fill="#4c8dff"/>
+  <path d="M21 52l-1-9 9 1z" fill="#38d39f"/>
+</svg>

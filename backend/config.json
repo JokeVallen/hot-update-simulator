@@ -21,7 +21,11 @@
   },
   "hotUpdate": {
     "defaultChannel": "default",
-    "channels": ["default", "beta", "dev"],
+    "channels": [
+      "default",
+      "beta",
+      "dev"
+    ],
     "gray": {
       "enabled": false,
       "percent": 0

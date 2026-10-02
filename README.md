@@ -33,9 +33,32 @@ cd frontend && npm run dev     # 开发模式，5173 端口，自动代理到 55
 npm run build                  # 或者构建成静态文件，由后端直接托管
 ```
 
+### 可视化面板
+
+构建之后打开 `http://localhost:5500/`，共 7 个页面：
+
+| 页面 | 做什么 |
+|---|---|
+| **总览** | 请求量、延迟分位、错误率、状态码分布、时间线，以及**有多少请求被模拟器动过手脚** |
+| **网络模拟** | 延迟/抖动/带宽/丢包/断网的滑块，带 WiFi/4G/3G/弱网 快捷档位和下载耗时预估 |
+| **故障注入** | 规则的增删改查，右侧列出 7 种故障类型各自在测客户端的什么能力 |
+| **预置方案** | 16 个场景卡片，一键切换；也可把当前配置存成自己的方案 |
+| **实时日志** | SSE 实时流，每条都标出被做了什么（`abort`、`+300ms`、`100Kbps`、`Range`…） |
+| **接口调试** | 直接调热更接口、看响应、下载资产测试耗时，用来现场验证模拟效果 |
+| **收藏** | 存下常用请求并重放（重放由服务器发起，会完整经过模拟器） |
+
+顶栏常驻一个**急停**按钮和模拟状态指示。注意状态灯反映的是"客户端视角"：
+打开断网后它会变成红色"连接中断"——这是对的，说明模拟在生效；
+而控制面板本身依然可用，所以永远能把参数调回来。
+
+### 测试
+
 ```bash
-npm run smoke        # 端到端冒烟测试：把每种故障都真触发一遍（74 项断言）
+npm run smoke        # 后端端到端：把每种故障都真触发一遍（74 项断言）
+npm run ui-check     # 前端界面：无头 Chrome 走完 7 个路由，捕获控制台报错
 ```
+
+`ui-check` 需要 Chrome 或 Edge，会在 `ui-check-shots/` 下给每个页面留一张截图。
 
 ---
 
@@ -122,11 +145,27 @@ backend/
   public/manual.md        使用手册（含 Unity C# 接入示例）
 storage/                  运行时数据，已 gitignore
   assets/{平台}/...       热更包放这里，不用手写清单
-frontend/                 Vite + Bootstrap 面板
+frontend/                 Vite + Bootstrap 面板（原生 JS，无框架）
+  src/
+    api.js                接口封装
+    store.js              应用状态与订阅
+    locales/              中英文语言包
+    ui/                   DOM 工具、提示条、侧边栏
+    views/                7 个页面，各自 mount/unmount
 scripts/
   make-sample-assets.js   生成示例热更包
-  smoke-test.js           端到端冒烟测试
+  smoke-test.js           后端端到端测试
+  ui-check.js             无头浏览器界面测试
 ```
+
+### 一个容易踩的坑：`/assets` 前缀
+
+后端的 `/assets` 是**热更资产下载路由**，所以前端构建产物**不能**放在
+`dist/assets/`（那是 Vite 的默认值）。两者一撞，浏览器请求
+`/assets/index-xxx.js` 会被热更处理器当成"平台名 = index-xxx.js"，返回 400，页面白屏。
+
+因此 `frontend/vite.config.js` 里把 `build.assetsDir` 改成了 `web`。
+这个配置别改回去。
 
 ### 热更包怎么放
 

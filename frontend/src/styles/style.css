@@ -1,0 +1,427 @@
+/* frontend/src/styles/style.css
+ *
+ * 主题与布局。
+ *
+ * 基调是深色的开发工具风格：这个面板会被长时间挂在旁边看日志，
+ * 浅色背景在暗环境下太刺眼。用 Bootstrap 5.3 的 CSS 变量做覆盖，
+ * 这样 Bootstrap 组件（表单、卡片、徽章）会自动跟着变，不用逐个改。
+ */
+
+:root {
+  --hus-sidebar-width: 220px;
+  --hus-topbar-height: 56px;
+  --hus-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+html[data-bs-theme="dark"] {
+  --bs-body-bg: #14171c;
+  --bs-body-color: #d6dae0;
+  --bs-secondary-bg: #1b1f26;
+  --bs-tertiary-bg: #21262e;
+  --bs-border-color: #2c323c;
+  --bs-primary: #4c8dff;
+  --bs-primary-rgb: 76, 141, 255;
+}
+
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* 等宽字体用于展示数据，对齐更好看 */
+.mono {
+  font-family: var(--hus-mono);
+  font-size: 0.8125rem;
+}
+
+/* ------------------------------------------------------------ 整体布局 */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.hus-sidebar {
+  width: var(--hus-sidebar-width);
+  flex: 0 0 var(--hus-sidebar-width);
+  background: var(--bs-secondary-bg);
+  border-right: 1px solid var(--bs-border-color);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1030;
+  transition: transform 0.2s ease;
+}
+
+.hus-brand {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.hus-brand h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+.hus-brand small {
+  color: var(--bs-secondary-color);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  display: block;
+  margin-top: 0.15rem;
+}
+
+.hus-nav {
+  padding: 0.75rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.hus-nav .nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--bs-body-color);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.15rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.hus-nav .nav-link:hover {
+  background: var(--bs-tertiary-bg);
+}
+
+.hus-nav .nav-link.active {
+  background: rgba(var(--bs-primary-rgb), 0.16);
+  color: var(--bs-primary);
+  font-weight: 600;
+}
+
+.hus-nav .nav-link i {
+  font-size: 1.05rem;
+  width: 1.25rem;
+  text-align: center;
+}
+
+.hus-sidebar-footer {
+  padding: 0.75rem;
+  border-top: 1px solid var(--bs-border-color);
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color);
+}
+
+.hus-main {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--hus-sidebar-width);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------------------------------------------------------ 顶栏 */
+
+.hus-topbar {
+  height: var(--hus-topbar-height);
+  flex: 0 0 var(--hus-topbar-height);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 1.25rem;
+  background: var(--bs-secondary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+  position: sticky;
+  top: 0;
+  z-index: 1020;
+}
+
+.hus-topbar .spacer {
+  flex: 1;
+}
+
+.hus-view {
+  padding: 1.5rem;
+  flex: 1;
+}
+
+/* 顶栏里的状态点 */
+.status-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+
+.status-dot.ok { background: #38d39f; }
+.status-dot.bad { background: #ff5c5c; }
+.status-dot.warn { background: #ffc14d; }
+
+/* 模拟中时缓慢呼吸，提醒你现在的数据是"假的" */
+.sim-indicator.active {
+  animation: hus-pulse 2s ease-in-out infinite;
+}
+
+@keyframes hus-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sim-indicator.active { animation: none; }
+}
+
+/* ------------------------------------------------------------ 通用块 */
+
+.hus-page-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.hus-page-intro {
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+  margin-bottom: 1.25rem;
+  max-width: 70ch;
+  line-height: 1.6;
+}
+
+.hus-card {
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.625rem;
+  padding: 1rem 1.15rem;
+  height: 100%;
+}
+
+.hus-card-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--bs-secondary-color);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.75rem;
+}
+
+/* 大数字统计卡 */
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stat-sub {
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color);
+  margin-top: 0.25rem;
+}
+
+/* ------------------------------------------------------------ 日志表 */
+
+.hus-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--hus-mono);
+  font-size: 0.8125rem;
+}
+
+.hus-log-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+  padding: 0.5rem 0.6rem;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--bs-secondary-color);
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.hus-log-table tbody td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: top;
+}
+
+.hus-log-table tbody tr:hover {
+  background: rgba(var(--bs-primary-rgb), 0.07);
+}
+
+/* 被模拟器干预过的行给个左侧色条，扫一眼就能挑出来 */
+.hus-log-table tbody tr.simulated td:first-child {
+  box-shadow: inset 3px 0 0 var(--bs-warning);
+}
+
+.log-scroll {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.log-incomplete {
+  color: var(--bs-secondary-color);
+}
+
+/* 模拟标注的标签 */
+.sim-tag {
+  font-size: 0.6875rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.25rem;
+  background: rgba(255, 193, 77, 0.15);
+  color: #ffc14d;
+  white-space: nowrap;
+  margin-right: 0.2rem;
+  display: inline-block;
+}
+
+/* ------------------------------------------------------------ 故障规则 */
+
+.rule-item {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.5rem;
+  background: var(--bs-body-bg);
+}
+
+.rule-item.disabled {
+  opacity: 0.5;
+}
+
+.rule-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.rule-meta {
+  font-family: var(--hus-mono);
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color);
+  margin-top: 0.2rem;
+  word-break: break-all;
+}
+
+/* 方案卡片 */
+.preset-card {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.5rem;
+  padding: 0.9rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bs-body-bg);
+  transition: border-color 0.15s ease;
+}
+
+.preset-card:hover {
+  border-color: rgba(var(--bs-primary-rgb), 0.5);
+}
+
+.preset-card .preset-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 0.35rem;
+}
+
+.preset-card .preset-desc {
+  font-size: 0.8125rem;
+  color: var(--bs-secondary-color);
+  line-height: 1.5;
+  flex: 1;
+  margin-bottom: 0.75rem;
+}
+
+/* ------------------------------------------------------------ 响应式 */
+
+.hus-sidebar-toggle {
+  display: none;
+}
+
+@media (max-width: 991.98px) {
+  .hus-sidebar {
+    transform: translateX(-100%);
+  }
+
+  .hus-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .hus-main {
+    margin-left: 0;
+  }
+
+  .hus-sidebar-toggle {
+    display: inline-flex;
+  }
+
+  .hus-view {
+    padding: 1rem;
+  }
+
+  .hus-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1029;
+  }
+}
+
+/* ------------------------------------------------------------ 小工具 */
+
+.url-cell {
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-pre {
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  max-height: 26rem;
+  overflow: auto;
+  font-family: var(--hus-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--bs-secondary-color);
+  padding: 2.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+/* 数字输入框去掉上下箭头，调参时容易误触 */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}

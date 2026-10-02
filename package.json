@@ -9,7 +9,8 @@
     "sample": "node scripts/make-sample-assets.js",
     "build": "cd frontend && npm run build",
     "dev:web": "cd frontend && npm run dev",
-    "smoke": "node scripts/smoke-test.js"
+    "smoke": "node scripts/smoke-test.js",
+    "ui-check": "node scripts/ui-check.js"
   },
   "keywords": [
     "hot-update",
