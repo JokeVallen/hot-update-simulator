@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="app_title">热更新模拟器 · 管理面板</title>
+</head>
+
+<body>
+    <div class="app-wrapper">
+        <div class="offcanvas offcanvas-start show" data-bs-scroll="true" data-bs-backdrop="static" tabindex="-1"
+            id="offcanvas" aria-labelledby="offcanvasLabel">
+            <div class="offcanvas-header">
+                <h5 class="offcanvas-title" id="offcanvasLabel" data-i18n="offcanvas_title">快捷操作</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close">
+                    <i class="bi bi-layout-sidebar"></i>
+                </button>
+            </div>
+            <div class="offcanvas-body"></div>
+        </div>
+
+        <button type="button" class="btn btn-primary text-nowrap position-absolute top-10 start-0"
+            id="offcanvasShownBtn">
+            <i class="bi bi-chevron-bar-right"></i>
+        </button>
+
+        <main class="main-content">
+            <div class="bg-primary bg-gradient">
+                <h3 data-i18n="content_title">热更新模拟器</h3>
+            </div>
+            <ul class="nav nav-tabs">
+                <li class="nav-item">
+                    <a class="nav-link">Active</a>
+                </li>
+            </ul>
+        </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>
