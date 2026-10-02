@@ -1,0 +1,28 @@
+# 统一用 LF，避免 Windows 上每次 checkout 都触发 CRLF 转换，
+# 导致 git status 一直显示文件被修改、diff 里全是行尾噪音。
+* text=auto eol=lf
+
+# 这些是二进制格式，不要做行尾转换，也不要在 diff 里当文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.zip binary
+*.ab binary
+*.unity3d binary
+*.bundle binary
+*.assetbundle binary
+*.apk binary
+*.ipa binary
+
+# package-lock.json 是自动生成的，折叠掉它的 diff 噪音
+package-lock.json -diff
+frontend/package-lock.json -diff
+
+# 让 GitHub 上的语言统计正确识别
+*.md text
