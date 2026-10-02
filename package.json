@@ -1,15 +1,24 @@
 {
   "name": "hot-update-simulator",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "游戏热更新服务端模拟器：可视化、可配置、带 API，用于复现弱网、断流、损坏等真实故障",
+  "main": "backend/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
-    "build": "cd frontend && npm run build"
+    "sample": "node scripts/make-sample-assets.js",
+    "build": "cd frontend && npm run build",
+    "dev:web": "cd frontend && npm run dev",
+    "smoke": "node scripts/smoke-test.js"
   },
-  "keywords": [],
+  "keywords": [
+    "hot-update",
+    "unity",
+    "assetbundle",
+    "simulator",
+    "network",
+    "chaos"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",

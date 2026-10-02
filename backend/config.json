@@ -1,0 +1,34 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5500,
+    "publicDir": "public",
+    "assetDir": "../storage/assets",
+    "enableBrowse": true,
+    "enableDocs": true
+  },
+  "network": {
+    "enabled": false,
+    "offline": false,
+    "latencyMs": 0,
+    "jitterMs": 0,
+    "bandwidthKbps": 0,
+    "packetLossRate": 0
+  },
+  "fault": {
+    "enabled": false,
+    "rules": []
+  },
+  "hotUpdate": {
+    "defaultChannel": "default",
+    "channels": ["default", "beta", "dev"],
+    "gray": {
+      "enabled": false,
+      "percent": 0
+    }
+  },
+  "logging": {
+    "maxEntries": 2000,
+    "logResponseBody": false
+  }
+}
