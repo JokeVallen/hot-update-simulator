@@ -34,7 +34,10 @@ const server = app.listen(port, host, () => {
     console.warn('    只在需要给真机联调时这样用，用完改回 127.0.0.1。');
   }
   console.log('');
-  logger.log({ message: `服务器已启动，监听 ${host}:${port}` });
+  // 这条消息会同时进终端和面板的日志表，所以用语言中立的英文：
+  // 日志行用英文是通行做法（同表里的 URL、状态码也都是英文），
+  // 也就不需要为了一行日志去做多语言。
+  logger.log({ message: `server started on ${host}:${port}` });
 });
 
 server.on('error', (err) => {

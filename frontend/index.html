@@ -53,13 +53,18 @@
                     <i class="bi bi-book"></i>
                     <span data-i18n="nav.manual">使用手册</span>
                 </a>
+                <!-- API 文档是 swagger-ui 的独立页面，用新标签页打开：
+                     否则会把正在用的面板导航走，而调试时经常要两边对着看。
+                     没有 data-route，所以不会被侧栏的路由拦截。 -->
+                <a class="nav-link" href="/docs" target="_blank" rel="noopener">
+                    <i class="bi bi-braces"></i>
+                    <span data-i18n="nav.apiDocs">API 文档</span>
+                    <i class="bi bi-box-arrow-up-right ms-auto small opacity-50"></i>
+                </a>
             </nav>
 
             <div class="hus-sidebar-footer">
                 <div id="husFooterInfo" class="mono">—</div>
-                <a href="/docs" target="_blank" rel="noopener" class="d-block mt-1">
-                    <i class="bi bi-box-arrow-up-right"></i> API Docs
-                </a>
             </div>
         </aside>
 

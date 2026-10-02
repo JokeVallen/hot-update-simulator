@@ -5,12 +5,27 @@
 // 这个页面是整个工具最常用的入口——大多数时候你不想手工调参数，
 // 只想"切到弱网看看客户端什么反应"。
 
-import { t } from '../locales/index.js'
+import { t, getLocale } from '../locales/index.js'
 import { api } from '../api.js'
 import { state, loadControl, loadPresets } from '../store.js'
 import { reportError, toastSuccess } from '../ui/toast.js'
 import { esc } from '../ui/dom.js'
 import { View, pageHeader, emptyState } from './common.js'
+
+/**
+ * 按当前语言取方案的名称与描述。
+ *
+ * 后端**同时**返回中英两套（name / nameEn），由前端挑 —— 这样切换语言
+ * 不需要重新请求，后端也不必知道前端选了哪种语言。
+ * 用户自己存的方案没有英文，自然回退到中文。
+ */
+function localized(preset) {
+  const preferEn = getLocale() === 'en'
+  return {
+    name: (preferEn && preset.nameEn) || preset.name,
+    description: (preferEn && preset.descriptionEn) || preset.description || '',
+  }
+}
 
 export class PresetsView extends View {
   constructor() {
@@ -51,6 +66,7 @@ export class PresetsView extends View {
     const net = preset.network || {}
     const fault = preset.fault || {}
     const isApplied = this.appliedId === preset.id
+    const text = localized(preset)
 
     const netLabel = net.enabled ? t('presets.networkOn') : t('presets.networkOff')
     const faultLabel = fault.enabled ? t('presets.faultOn') : t('presets.faultOff')
@@ -60,12 +76,12 @@ export class PresetsView extends View {
       <div class="col-12 col-md-6 col-xl-4">
         <div class="preset-card ${isApplied ? 'border-primary' : ''}" data-preset-id="${esc(preset.id)}">
           <div class="d-flex align-items-start justify-content-between">
-            <div class="preset-name">${esc(preset.name)}</div>
+            <div class="preset-name">${esc(text.name)}</div>
             <span class="badge ${preset.builtin ? 'text-bg-secondary' : 'text-bg-primary'}">
               ${esc(preset.builtin ? t('presets.builtin') : t('presets.custom'))}
             </span>
           </div>
-          <div class="preset-desc">${esc(preset.description || '')}</div>
+          <div class="preset-desc">${esc(text.description)}</div>
           <div class="rule-meta mb-2">
             ${esc(t('presets.summary', { network: netLabel, fault: faultLabel, rules: ruleCount }))}
           </div>
@@ -94,7 +110,7 @@ export class PresetsView extends View {
           if (!this.isActive()) return
           this.appliedId = id
           const preset = (state.presets || []).find((p) => p.id === id)
-          toastSuccess(t('presets.applied', { name: preset ? preset.name : id }))
+          toastSuccess(t('presets.applied', { name: preset ? localized(preset).name : id }))
           this.render()
         } catch (err) {
           reportError(err, t('toast.actionFailed'))

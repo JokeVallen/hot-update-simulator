@@ -11,7 +11,8 @@
     "logs": "Live Logs",
     "explorer": "API Console",
     "favorites": "Favorites",
-    "manual": "Manual"
+    "manual": "Manual",
+    "apiDocs": "API Docs"
   },
   "common": {
     "apply": "Apply",

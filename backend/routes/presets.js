@@ -49,6 +49,136 @@ const NO_NETWORK = {
 };
 
 /**
+ * 内置方案的英文文案。
+ *
+ * 为什么单独放一张表，而不是把 nameEn / descriptionEn 塞进每个方案对象里：
+ *   1. 中文是这个工具的主语言，定义处保持清爽，改参数时不用在两种语言之间来回跳；
+ *   2. 缺翻译时能自然地回退到中文，不用每处都写兜底；
+ *   3. 两份文案放在一起对照，比散在 200 行里的成对字段更容易检查。
+ *
+ * API 会**同时**返回中英两套（name / nameEn），由前端按当前语言挑。
+ * 这样切语言不需要重新请求，也不需要后端知道前端选了什么语言。
+ */
+const BUILTIN_EN = {
+  ideal: {
+    name: 'Ideal network',
+    description: 'All simulation off — use this to confirm the baseline works.',
+  },
+  'wifi-good': {
+    name: 'Good WiFi',
+    description: '50ms latency, slight jitter, no bandwidth limit. Reference baseline.',
+  },
+  '4g-normal': {
+    name: 'Typical 4G',
+    description: '150ms latency, 60ms jitter, ~2Mbps. What you see on a city mobile network.',
+  },
+  '3g-weak': {
+    name: 'Weak 3G',
+    description: '400ms latency, 150ms jitter, ~400Kbps. For testing download progress and chunked loading.',
+  },
+  'extreme-weak': {
+    name: 'Extremely weak',
+    description: '1.2s latency, 500ms jitter, ~100Kbps, 5% packet loss. The floor for timeouts and resume.',
+  },
+  'packet-loss-20': {
+    name: '20% packet loss',
+    description: 'One in five requests gets its connection killed. For testing automatic retry and backoff.',
+  },
+  'server-down': {
+    name: 'Server down',
+    description: 'Every connection is reset (not a 503). Tests telling "cannot connect" apart from "server returned an error".',
+  },
+  'abort-download': {
+    name: 'Abort mid-download',
+    description: 'Kills the connection at 50% of an asset. Tests whether resume (Range) really continues where it stopped.',
+  },
+  'corrupt-asset': {
+    name: 'Corrupted asset',
+    description: 'Correct length, damaged content. Tests whether md5 is actually verified — without it you load garbage.',
+  },
+  'truncate-asset': {
+    name: 'Length mismatch',
+    description: 'Declares a full length, sends less, then closes cleanly. Tests detection of a premature end.',
+  },
+  'api-500': {
+    name: 'Version API 500',
+    description: 'Version lookup always returns 500. Tests the client message and fallback for server errors.',
+  },
+  'retry-then-ok': {
+    name: 'Fails twice, then works',
+    description: 'The version API returns 500 twice, then succeeds. Verifies retry really happens and respects its limit.',
+  },
+  'api-timeout': {
+    name: 'Version API timeout',
+    description: 'The version API never responds. Tests whether the client sets a sane timeout.',
+  },
+  'empty-manifest': {
+    name: 'Empty manifest',
+    description: 'The manifest API returns 200 with an empty body. Tests that empty manifests/files do not crash the client.',
+  },
+  'slow-header': {
+    name: 'Slow response headers',
+    description: 'Headers arrive after 5 seconds. Tests whether connect and read timeouts are configured separately.',
+  },
+  'weak-plus-abort': {
+    name: 'Weak link + abort (combo)',
+    description: 'Weak 3G stacked with a mid-download abort. What the real internet looks like — use it for final robustness sign-off.',
+  },
+};
+
+/**
+ * 内置故障规则的英文名与响应体。
+ *
+ * 规则名和 action.body 在「应用方案」时会**落盘**成配置里的一条规则，
+ * 所以它们不像方案名称那样能随时切换 —— 必须在应用的那一刻就定下语言。
+ * 因此 apply 接口接受 ?lang=，在这里取一次。
+ */
+const RULE_EN = {
+  'abort-assets': { name: 'Abort mid-download' },
+  'corrupt-assets': { name: 'Corrupted content' },
+  'truncate-assets': { name: 'Length mismatch' },
+  'version-500': { name: 'Version API 500', body: 'Simulated: version service unavailable' },
+  'version-retry': { name: 'Version API fails twice', body: 'Simulated: temporary failure' },
+  'version-timeout': { name: 'Version API timeout' },
+  'manifest-empty': { name: 'Empty manifest' },
+  'slow-version': { name: 'Slow version headers' },
+  'combo-abort': { name: 'Abort under a weak link' },
+};
+
+/**
+ * 给方案补上英文文案。
+ * 不做深拷贝：这两张表都是常量，不会被改动，直接挂引用的开销更小。
+ * @param {object} preset
+ * @param {'zh'|'en'} [lang] 应用方案时用它决定规则名和响应体用哪种语言
+ */
+function localizePreset(preset, lang = 'zh') {
+  if (!preset) return preset;
+  const en = BUILTIN_EN[preset.id];
+  const out = { ...preset };
+  if (en) {
+    out.nameEn = en.name;
+    out.descriptionEn = en.description;
+  }
+
+  if (lang === 'en' && out.fault && Array.isArray(out.fault.rules)) {
+    out.fault = {
+      ...out.fault,
+      rules: out.fault.rules.map((r) => {
+        const t = RULE_EN[r.id];
+        if (!t) return r;
+        return {
+          ...r,
+          name: t.name || r.name,
+          action: { ...r.action, ...(t.body ? { body: t.body } : {}) },
+        };
+      }),
+    };
+  }
+
+  return out;
+}
+
+/**
  * 内置场景方案。
  * 每条 description 说明它到底在测客户端的哪个能力——
  * 这样打开界面就知道该用哪个，不用去猜。
@@ -245,6 +375,19 @@ function writeCustom(list) {
   store.write({ custom: list });
 }
 
+/**
+ * 全部方案（内置的补上英文文案）。
+ * @param {'zh'|'en'} [lang] 只有"应用方案"需要它 —— 规则名和响应体会落盘
+ */
+function allPresets(lang = 'zh') {
+  return [...BUILTIN_PRESETS.map((p) => localizePreset(p, lang)), ...readCustom()];
+}
+
+/** 从查询串里取语言，只认 en，其余一律回退中文。 */
+function langOf(req) {
+  return String(req.query.lang || '').toLowerCase().startsWith('en') ? 'en' : 'zh';
+}
+
 module.exports = function createPresetsRouter({ configManager, faultInjector }) {
   const router = express.Router();
 
@@ -274,7 +417,7 @@ module.exports = function createPresetsRouter({ configManager, faultInjector }) 
    *       400: { description: 参数非法 }
    */
   router.get('/', (req, res) => {
-    res.json({ presets: [...BUILTIN_PRESETS, ...readCustom()] });
+    res.json({ presets: allPresets() });
   });
 
   router.post('/', (req, res) => {
@@ -373,7 +516,7 @@ module.exports = function createPresetsRouter({ configManager, faultInjector }) 
    *       404: { description: 不存在 }
    */
   router.get('/:id', (req, res) => {
-    const all = [...BUILTIN_PRESETS, ...readCustom()];
+    const all = allPresets();
     const preset = all.find((p) => p.id === req.params.id);
     if (!preset) return res.status(404).json({ error: `方案不存在：${req.params.id}` });
     return res.json(preset);
@@ -428,7 +571,10 @@ module.exports = function createPresetsRouter({ configManager, faultInjector }) 
    *       404: { description: 方案不存在 }
    */
   router.post('/:id/apply', (req, res) => {
-    const all = [...BUILTIN_PRESETS, ...readCustom()];
+    // 应用方案会把规则写进配置，而规则名和 action.body 是**落盘**的字符串，
+    // 不能像方案名那样随界面语言实时切换 —— 所以在应用这一刻就按请求的语言定下来。
+    const lang = langOf(req);
+    const all = allPresets(lang);
     const preset = all.find((p) => p.id === req.params.id);
     if (!preset) return res.status(404).json({ error: `方案不存在：${req.params.id}` });
 

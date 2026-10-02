@@ -13,7 +13,7 @@ const BASE = ''
 
 // 面向用户的错误文案走语言包。api.js 依赖 locales 是单向的
 // （locales 不反过来依赖 api），不会形成环。
-import { t } from './locales/index.js'
+import { t, getLocale } from './locales/index.js'
 
 export class ApiError extends Error {
   constructor(message, { status = null, body = null, cause = null } = {}) {
@@ -163,7 +163,17 @@ export const api = {
   presets: {
     list: () => json('/api/presets'),
     get: (id) => json(`/api/presets/${id}`),
-    apply: (id) => json(`/api/presets/${id}/apply`, { method: 'POST' }),
+    /**
+     * 应用方案。
+     *
+     * 自动带上当前语言：应用方案会把故障规则的**名称**和响应体写进配置，
+     * 那些是落盘的字符串，之后不会随界面语言变化，所以必须在这一刻定语言。
+     * 由 API 层统一附加，调用方不用关心这件事。
+     */
+    apply: (id) => json(
+      `/api/presets/${encodeURIComponent(id)}/apply?lang=${encodeURIComponent(getLocale())}`,
+      { method: 'POST' },
+    ),
     capture: (name, description) =>
       json('/api/presets/capture', { method: 'POST', body: { name, description } }),
     remove: (id) => json(`/api/presets/${id}`, { method: 'DELETE' }),

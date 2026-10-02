@@ -407,51 +407,64 @@ async function main() {
 
     // ---------------------------------------------------------- 语言包完整性
     //
-    // t() 找不到 key 时会回退到中文，所以英文界面里如果冒出中文，
-    // 就说明 en.json 漏翻了。只看侧边栏和顶栏——这两块文案完全来自
-    // 语言包；页面正文里可能有后端返回的中文（比如预置方案的名字），
-    // 拿它判断会误报。
-    console.log('\n语言包完整性');
-    await cdp.send('Runtime.evaluate', {
-      expression: `localStorage.setItem('hus.locale', 'en')`,
-      returnByValue: true,
-    });
-    // 必须带上查询参数：只改 hash 属于同文档跳转，页面不会重新加载，
-    // initI18n() 也就不会重跑，语言根本切不过去。
-    await cdp.send('Page.navigate', { url: `${TARGET_URL}/?ui-check=locale#/dashboard` });
-    await sleep(2800);
-    const localeResult = await cdp.send('Runtime.evaluate', {
-      expression: `(() => {
-        // 连主视图一起扫：只查侧栏和顶栏会漏掉页面内部的硬编码
-        // （比如统计窗口的"分钟"、网络页的"弱网"档位）。
-        // 这里停在 dashboard 路由上，它的内容全是前端文案 + ASCII 数据
-        // （路径、数字），不会有后端返回的中文造成误报。
-        const zones = [
-          document.getElementById('husSidebar'),
-          document.querySelector('.hus-topbar'),
-          document.getElementById('husView'),
-        ];
-        const found = [];
-        for (const zone of zones) {
-          if (!zone) continue;
-          // 语言下拉框里的「中文」是语言的自称，跟中文界面里显示 English 一样，
-          // 属于故意保留的，不是漏翻 —— 先把它摘掉再扫描
-          const clone = zone.cloneNode(true);
-          clone.querySelectorAll('select').forEach((s) => s.remove());
-          const text = clone.innerText || clone.textContent || '';
-          const matches = text.match(/[\\u4e00-\\u9fa5]+/g);
-          if (matches) found.push(...matches);
-        }
-        return JSON.stringify({ samples: [...new Set(found)].slice(0, 12), count: found.length });
-      })()`,
-      returnByValue: true,
-    });
-    const localeInfo = JSON.parse(localeResult.result.value);
-    const localeOk = localeInfo.count === 0;
-    console.log(`${localeOk ? '  ✓' : '  ✗'} 英文界面没有漏翻残留（发现 ${localeInfo.count} 处）`);
-    if (!localeOk) {
-      console.log(`      残留样例：${localeInfo.samples.join(' / ')}`);
-      problems.push(`en.json 漏翻：${localeInfo.samples.join(' / ')}`);
+    // 必须在**每一个路由**上扫，而不是只看总览页。
+    // 原来的检查只扫了 dashboard + 侧栏 + 顶栏，于是故障注入、接口调试、
+    // 收藏那几页里的硬编码中文全部漏网 —— 报"0 处漏翻"是假的。
+    //
+    // 两类"看起来像漏翻"的东西要排除：
+    //   1. `.hus-markdown` 里的内容：手册本身就是中文文档，那是内容不是 UI
+    //   2. 语言下拉框里的「中文」：语言的自称，故意保留
+    // 其余扫到的中文一律记下来。
+    console.log('\n语言包完整性（逐页扫描）');
+
+    const localeLeaks = new Map();
+
+    for (const route of ROUTES) {
+      await cdp.send('Runtime.evaluate', {
+        expression: `localStorage.setItem('hus.locale', 'en')`,
+        returnByValue: true,
+      });
+      // 带查询参数强制真实加载：只改 hash 属于同文档跳转，
+      // initI18n() 不会重跑，语言根本切不过去。
+      await cdp.send('Page.navigate', { url: `${TARGET_URL}/?ui-check=locale-${route}#/${route}` });
+      await sleep(1900);
+
+      const scan = await cdp.send('Runtime.evaluate', {
+        expression: `(() => {
+          const zones = [
+            document.getElementById('husSidebar'),
+            document.querySelector('.hus-topbar'),
+            document.getElementById('husView'),
+          ];
+          const found = [];
+          for (const zone of zones) {
+            if (!zone) continue;
+            const clone = zone.cloneNode(true);
+            // .hus-markdown 是手册正文，.hus-manual-toc 是它的目录 ——
+            // 两者都是**内容**（手册本身就是中文文档），不是界面文案，
+            // 拿它们判断漏翻会一直误报。界面上的手册标题/按钮仍在扫描范围内。
+            clone.querySelectorAll('select, .hus-markdown, .hus-manual-toc').forEach((n) => n.remove());
+            const text = clone.innerText || clone.textContent || '';
+            const matches = text.match(/[\\u4e00-\\u9fa5]+/g);
+            if (matches) found.push(...matches);
+          }
+          return JSON.stringify([...new Set(found)]);
+        })()`,
+        returnByValue: true,
+      });
+
+      const samples = JSON.parse(scan.result.value);
+      if (samples.length) localeLeaks.set(route, samples);
+    }
+
+    const totalLeaks = [...localeLeaks.values()].reduce((n, s) => n + s.length, 0);
+    const localeOk = totalLeaks === 0;
+    check(`英文界面各页均无漏翻残留（扫描 ${ROUTES.length} 个路由）`, localeOk,
+      localeOk ? '' : `${totalLeaks} 处，按页面见下`);
+
+    for (const [route, samples] of localeLeaks) {
+      console.log(`      #/${route}: ${samples.slice(0, 16).join(' / ')}`
+        + `${samples.length > 16 ? ` …(+${samples.length - 16})` : ''}`);
     }
 
     // 恢复成中文，别把测试状态留给用户
