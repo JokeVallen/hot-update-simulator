@@ -40,13 +40,25 @@ npm run build && npm start
   在浏览器地址栏直接打开 `/manual.md` 会被自动转到 `/manual`（因为浏览器对
   `text/markdown` 只会当纯文本显示）；想强制看源文件就加 `?raw=1`。
 
-手册的源文件就是 `backend/public/manual.md`，改完刷新页面即可，不需要重启。
+手册按语言分成独立文件，和 `frontend/src/locales/` 的结构一致，用 `?lang=` 选：
+
+| 文件 | 语言 |
+|---|---|
+| `backend/public/manual.zh-CN.md` | 中文（本文件） |
+| `backend/public/manual.en.md` | 英文 |
+
+例如 `curl "http://localhost:5500/manual.md?lang=en"` 拿到英文源文件。
+不带 `?lang=` 时默认中文。改完刷新页面即可，不需要重启。
+
+面板里的手册会**跟着界面语言自动切换**。如果你加了一种新语言，
+记得同时补上对应的手册文件和 `backend/app.js` 里的 `MANUAL_FILES` 白名单
+（那个映射是白名单，不是拼接路径——用它拼路径会变成任意文件读取）。
 
 ---
 
 ## 面板怎么用
 
-打开 `http://localhost:5500/`（需要先 `npm run build`）后，左侧有 7 个页面：
+打开 `http://localhost:5500/`（需要先 `npm run build`）后，左侧有 9 项——8 个页面，外加一个新标签页打开的 API 文档：
 
 | 页面 | 什么时候用 |
 |---|---|
@@ -90,7 +102,7 @@ backend/
     requestPipeline.js    把上面两个模拟器串起来施加到请求上
     loggerMiddleware.js   记录每个请求的最终结果
   routes/                 各个接口
-  public/manual.md        本文件
+  public/manual.zh-CN.md  本文件（中文手册）
 storage/                  运行时数据（已 gitignore）
   assets/{平台}/...       热更包放这里
   presets.json            自定义预置方案
@@ -100,7 +112,7 @@ frontend/                 Vite + Bootstrap 面板（原生 JS，无框架）
   src/store.js            应用状态与订阅
   src/locales/            中英文语言包
   src/ui/                 DOM 工具、提示条、侧边栏
-  src/views/              7 个页面，各自 mount/unmount
+  src/views/              8 个页面，各自 mount/unmount
 dist/                     前端构建产物（已 gitignore）
 scripts/                  示例资产生成、后端与前端测试
 ```

@@ -199,6 +199,12 @@ async function main() {
     toastWarn(t('errors.backendDown'), 8000)
   }
 
+  // 立刻探一次连通性。
+  // 不能只靠下面的 5 秒轮询：bootstrap 里的 loadControl() 不再写 connected
+  // （那是刻意的，见 store.js），所以不主动探一次的话，顶栏会停在
+  // "检测中…" 整整 5 秒才变。
+  await refreshStatus()
+
   // 任何状态变化都刷新顶栏和侧栏底部
   on('change', renderTopbar)
 

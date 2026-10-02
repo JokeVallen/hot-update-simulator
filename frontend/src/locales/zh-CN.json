@@ -248,11 +248,12 @@
   },
   "manual": {
     "title": "使用手册",
-    "intro": "功能说明、配置详解、Unity 接入示例与排查方法。内容就是 backend/public/manual.md，改完刷新即可。",
+    "intro": "功能说明、配置详解、Unity 接入示例与排查方法。内容就是 backend/public/manual.zh-CN.md，改完刷新即可；切换到英文时会自动加载 manual.en.md。",
     "toc": "目录",
     "viewSource": "查看原始 Markdown",
     "sourceHint": "需要复制内容或下载源文件时用左边这个",
-    "loadFailed": "手册加载失败"
+    "loadFailed": "手册加载失败",
+    "missing": "这个语言还没有对应版本的手册（{lang}）"
   },
   "errors": {
     "networkDown": "无法连接到后端服务，请确认服务器正在运行",

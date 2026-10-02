@@ -161,10 +161,14 @@ async function main() {
   const consoleErrors = [];
 
   /** 断言辅助：失败时同时记进 problems，参与最后的汇总与退出码。 */
+  let checksPassed = 0;
+  let checksFailed = 0;
   function check(name, condition, detail = '') {
     if (condition) {
+      checksPassed += 1;
       console.log(`  ✓ ${name}`);
     } else {
+      checksFailed += 1;
       console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`);
       problems.push(`${name}${detail ? ` — ${detail}` : ''}`);
     }
@@ -320,6 +324,31 @@ async function main() {
     const navOk = navInfo.hash === '#/presets' && navInfo.hasCards > 0;
     console.log(`${navOk ? '  ✓' : '  ✗'} 侧边导航切换正常（hash=${navInfo.hash}，方案卡片 ${navInfo.hasCards} 张）`);
 
+    // 顶栏的连接状态必须很快就有结论。
+    // 原来的实现只挂了 5 秒轮询、从没在初始化时探过一次，
+    // 于是页面加载后的头 5 秒一直显示"检测中…"，看着像卡住了。
+    await cdp.send('Runtime.evaluate', { expression: `localStorage.setItem('hus.locale','zh-CN')` });
+    await cdp.send('Page.navigate', { url: `${TARGET_URL}/?ui-check=status#/dashboard` });
+    await sleep(2000);
+    const connStatus = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const el = document.getElementById('husConnStatus');
+        const dot = el ? el.querySelector('.status-dot') : null;
+        return JSON.stringify({
+          text: el ? el.innerText.trim() : '',
+          cls: dot ? dot.className : '',
+        });
+      })()`,
+      returnByValue: true,
+    });
+    const conn = JSON.parse(connStatus.result.value);
+    check('顶栏在 2 秒内就得出连接状态（不能停在"检测中"）',
+      !/检测中|Checking/.test(conn.text),
+      `显示的是「${conn.text}」`);
+    check('连接状态是正常的绿色（后端确实在跑）',
+      conn.cls.includes('ok'),
+      `状态点 class=${conn.cls}`);
+
     // ---------------------------------------------------------- 故障规则编辑器
     //
     // 这一段是补上的：原来的界面检查只验证"路由能渲染"和三个按钮，
@@ -409,12 +438,11 @@ async function main() {
     //
     // 必须在**每一个路由**上扫，而不是只看总览页。
     // 原来的检查只扫了 dashboard + 侧栏 + 顶栏，于是故障注入、接口调试、
-    // 收藏那几页里的硬编码中文全部漏网 —— 报"0 处漏翻"是假的。
+    // 收藏、手册那几页里的中文全部漏网 —— 报"0 处漏翻"是假的。
     //
-    // 两类"看起来像漏翻"的东西要排除：
-    //   1. `.hus-markdown` 里的内容：手册本身就是中文文档，那是内容不是 UI
-    //   2. 语言下拉框里的「中文」：语言的自称，故意保留
-    // 其余扫到的中文一律记下来。
+    // 手册改成中英各一份之后，这里不再为它开例外：英文界面下**整页**
+    // 都不该出现中文（正文、目录都算）。唯一排除的是语言下拉框里的「中文」，
+    // 那是语言的自称，跟中文界面里显示 English 一样，属于故意保留。
     console.log('\n语言包完整性（逐页扫描）');
 
     const localeLeaks = new Map();
@@ -440,10 +468,10 @@ async function main() {
           for (const zone of zones) {
             if (!zone) continue;
             const clone = zone.cloneNode(true);
-            // .hus-markdown 是手册正文，.hus-manual-toc 是它的目录 ——
-            // 两者都是**内容**（手册本身就是中文文档），不是界面文案，
-            // 拿它们判断漏翻会一直误报。界面上的手册标题/按钮仍在扫描范围内。
-            clone.querySelectorAll('select, .hus-markdown, .hus-manual-toc').forEach((n) => n.remove());
+            // 只排除语言下拉框（「中文」是语言的自称，故意保留）。
+            // 手册正文与目录都在扫描范围内 —— 手册已经中英各一份，
+            // 英文界面下它们不该再出现中文。
+            clone.querySelectorAll('select').forEach((n) => n.remove());
             const text = clone.innerText || clone.textContent || '';
             const matches = text.match(/[\\u4e00-\\u9fa5]+/g);
             if (matches) found.push(...matches);
@@ -456,6 +484,47 @@ async function main() {
       const samples = JSON.parse(scan.result.value);
       if (samples.length) localeLeaks.set(route, samples);
     }
+
+    // 防"空洞通过"：如果页面主体还没渲染出来就扫描，扫到的是"加载中…"
+    // （那句本身已翻译），检查会声称 0 处漏翻 —— 而实际内容根本没被检查。
+    // 手册页尤其危险：它要 fetch 一份 20KB 的 markdown 再解析。
+    // 所以这里等它渲染完，**在同一个页面上重新扫一遍**并覆盖循环里的结果。
+    await cdp.send('Page.navigate', { url: `${TARGET_URL}/?ui-check=locale-verify#/manual` });
+    await sleep(3200);
+    const manualRendered = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const content = document.querySelector('#manualContent');
+        const toc = document.querySelectorAll('.hus-manual-toc a').length;
+        const zones = [
+          document.getElementById('husSidebar'),
+          document.querySelector('.hus-topbar'),
+          document.getElementById('husView'),
+        ];
+        const found = [];
+        for (const zone of zones) {
+          if (!zone) continue;
+          const clone = zone.cloneNode(true);
+          clone.querySelectorAll('select').forEach((n) => n.remove());
+          const text = clone.innerText || clone.textContent || '';
+          const matches = text.match(/[\\u4e00-\\u9fa5]+/g);
+          if (matches) found.push(...matches);
+        }
+        return JSON.stringify({
+          chars: content ? content.innerText.length : 0,
+          toc,
+          leaks: [...new Set(found)],
+        });
+      })()`,
+      returnByValue: true,
+    });
+    const rendered = JSON.parse(manualRendered.result.value);
+    check('语言包扫描前手册确实渲染出来了（防止空洞通过）',
+      rendered.chars > 3000 && rendered.toc > 10,
+      `正文 ${rendered.chars} 字符，目录 ${rendered.toc} 项 —— 太少说明扫描时页面还没加载完`);
+
+    // 用"确认渲染之后"的结果覆盖循环里那次可能过早的扫描
+    if (rendered.leaks.length) localeLeaks.set('manual', rendered.leaks);
+    else localeLeaks.delete('manual');
 
     const totalLeaks = [...localeLeaks.values()].reduce((n, s) => n + s.length, 0);
     const localeOk = totalLeaks === 0;
@@ -479,6 +548,9 @@ async function main() {
     console.log(`\n${'='.repeat(56)}`);
     console.log(`路由通过 ${passed} / ${ROUTES.length}`);
     console.log(`交互通过 ${interactionPassed} / 3`);
+    // 断言总数：包括上面那 3 个具名交互之外的（编辑器、连接状态、语言包等）。
+    // 只报"3/3"会让人以为整个界面检查只有 3 条断言。
+    console.log(`断言总计 ${checksPassed} 通过 / ${checksPassed + checksFailed} 条`);
     console.log(`语言包 ${localeOk ? '通过' : '有漏翻'}`);
     if (uniqueProblems.length) {
       console.log(`\n发现 ${uniqueProblems.length} 个问题：`);

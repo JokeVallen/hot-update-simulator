@@ -248,11 +248,12 @@
   },
   "manual": {
     "title": "Manual",
-    "intro": "Feature guide, configuration details, Unity integration sample and troubleshooting. This renders backend/public/manual.md — refresh to pick up edits.",
+    "intro": "Feature guide, configuration details, Unity integration sample and troubleshooting. This renders backend/public/manual.en.md; switching to Chinese loads manual.zh-CN.md. Refresh to pick up edits.",
     "toc": "Contents",
     "viewSource": "View raw Markdown",
-    "sourceHint": "Use this when you need to copy content or download the source",
-    "loadFailed": "Failed to load the manual"
+    "sourceHint": "Use this to copy content or download the source",
+    "loadFailed": "Failed to load the manual",
+    "missing": "No manual is available for this language yet ({lang})"
   },
   "errors": {
     "networkDown": "Cannot reach the backend — make sure the server is running",

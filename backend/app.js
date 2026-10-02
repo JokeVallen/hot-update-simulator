@@ -250,7 +250,23 @@ if (serverCfg.enableBrowse !== false && process.env.NODE_ENV !== 'production') {
 // 而不是满屏的 # 和 |（浏览器对 text/markdown 只会当纯文本显示）。
 // 所以这里做内容协商：请求头带 text/html（浏览器顶层导航的特征）就转到面板；
 // fetch() 默认发 */*，因此仍然拿到源文件；想强制要源文件就加 ?raw=1。
+//
+// 手册按语言分成独立文件，和 frontend/src/locales/ 的结构保持一致：
+//   manual.zh-CN.md / manual.en.md，用 ?lang=<语言代码> 选。
 app.get('/manual', (req, res) => res.redirect('/#/manual'));
+
+/**
+ * 语言代码 → 文件名的**白名单**。
+ *
+ * 这个映射是必须的：`?lang=` 直接决定读磁盘上的哪个文件，如果拿它去拼路径，
+ * 就成了一个任意文件读取漏洞（`?lang=../../../../etc/passwd`）。
+ * 用查表的方式，用户输入永远只是"键"，取出来的"值"是我们写死的常量。
+ */
+const MANUAL_FILES = {
+  'zh-CN': 'manual.zh-CN.md',
+  en: 'manual.en.md',
+};
+const MANUAL_DEFAULT_LANG = 'zh-CN';
 
 app.get('/manual.md', (req, res) => {
   const wantsRaw = req.query.raw === '1';
@@ -259,11 +275,18 @@ app.get('/manual.md', (req, res) => {
     return res.redirect('/#/manual');
   }
 
-  const manualPath = path.join(__dirname, 'public', 'manual.md');
+  const requested = String(req.query.lang || '');
+  const lang = Object.prototype.hasOwnProperty.call(MANUAL_FILES, requested)
+    ? requested
+    : MANUAL_DEFAULT_LANG;
+
+  const manualPath = path.join(__dirname, 'public', MANUAL_FILES[lang]);
   res.type('text/markdown; charset=utf-8');
+  // 方便排查"为什么拿到的是另一种语言"
+  res.setHeader('X-Manual-Lang', lang);
   return res.sendFile(manualPath, (err) => {
     if (err && !res.headersSent) {
-      res.status(404).type('text/plain; charset=utf-8').send('手册文件不存在');
+      res.status(404).type('text/plain; charset=utf-8').send(`手册文件不存在：${MANUAL_FILES[lang]}`);
     }
   });
 });

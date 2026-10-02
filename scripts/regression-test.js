@@ -600,11 +600,122 @@ async function testAssetEdgeCases() {
       `状态 ${rescue.status}, err=${rescue.error}`);
 
     await clearFaults(port);
+    // ---------------- 使用手册的语言路由 ----------------
+    section('使用手册的多语言路由');
+
+    const zhManual = await request(port, '/manual.md?lang=zh-CN');
+    check('?lang=zh-CN 拿到中文手册',
+      zhManual.status === 200 && zhManual.headers['x-manual-lang'] === 'zh-CN'
+        && zhManual.body.length > 1000,
+      `状态 ${zhManual.status}, lang=${zhManual.headers['x-manual-lang']}, ${zhManual.body.length} 字节`);
+
+    const defaultManual = await request(port, '/manual.md');
+    check('不带 ?lang 时默认中文',
+      defaultManual.status === 200 && defaultManual.headers['x-manual-lang'] === 'zh-CN',
+      `lang=${defaultManual.headers['x-manual-lang']}`);
+
+    // 语言代码直接决定读哪个文件，所以必须是白名单查表而不是拼接路径。
+    // 这一组是防回归：把 lang 改成拼路径的实现，这几条会立刻全红。
+    const traversals = [
+      '../../../../etc/passwd',
+      '..%2f..%2fpackage.json',
+      '../../app.js',
+      '/etc/passwd',
+      'manual.zh-CN',
+      'zh-CN/../../app.js',
+    ];
+    let escaped = 0;
+    for (const evil of traversals) {
+      const res = await request(port, `/manual.md?lang=${evil}`);
+      // 合法结果只有两种：回退到默认语言，或者明确 404。绝不该读出别的文件。
+      const fellBack = res.headers['x-manual-lang'] === 'zh-CN';
+      const leaked = res.status === 200 && !fellBack;
+      if (leaked) {
+        escaped += 1;
+        console.log(`      ✗ lang=${evil} 读出了非手册内容（${res.body.length} 字节）`);
+      }
+    }
+    check('非法语言代码不会读到任意文件（白名单生效）', escaped === 0,
+      `${escaped} / ${traversals.length} 个穿越尝试得逞`);
+
+    const manualPage = await request(port, '/manual');
+    check('/manual 重定向到面板内的手册页',
+      manualPage.status === 302 && String(manualPage.headers.location).includes('#/manual'),
+      `状态 ${manualPage.status}, location=${manualPage.headers.location}`);
+
+    const browserNav = await request(port, '/manual.md', { headers: { Accept: 'text/html' } });
+    check('浏览器直接打开 /manual.md 会转到渲染页',
+      browserNav.status === 302 && String(browserNav.headers.location).includes('#/manual'),
+      `状态 ${browserNav.status}, location=${browserNav.headers.location}`);
+
+    const rawForced = await request(port, '/manual.md?raw=1', { headers: { Accept: 'text/html' } });
+    check('?raw=1 时即使浏览器也拿到源文件',
+      rawForced.status === 200 && String(rawForced.headers['content-type']).includes('text/markdown'),
+      `状态 ${rawForced.status}, type=${rawForced.headers['content-type']}`);
   } finally {
     try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     await clearFaults(port).catch(() => {});
     server.close();
   }
+}
+
+// ============================================================ 静态检查
+
+/**
+ * 两份手册的结构必须逐项一致。
+ *
+ * 面板会从标题自动生成目录，所以标题的**层级和数量**一变，目录就错位。
+ * 靠人肉比对 300 多行很容易漏，这里直接把结构量出来对齐。
+ */
+function testManualStructure() {
+  section('手册的中英文结构一致性');
+
+  const dir = path.resolve(__dirname, '..', 'backend', 'public');
+  const files = { 'zh-CN': 'manual.zh-CN.md', en: 'manual.en.md' };
+
+  const measure = (file) => {
+    const text = fs.readFileSync(file, 'utf8');
+    const lines = text.split('\n');
+    return {
+      headings: lines.filter((l) => /^#{1,6} /.test(l)).map((l) => l.match(/^#+/)[0].length),
+      fences: lines.filter((l) => /^```/.test(l)).length,
+      tableRows: lines.filter((l) => /^\|/.test(l)).length,
+      links: (text.match(/\]\([^)]+\)/g) || []).length,
+      lines: lines.length,
+    };
+  };
+
+  const zhPath = path.join(dir, files['zh-CN']);
+  const enPath = path.join(dir, files.en);
+
+  if (!fs.existsSync(enPath)) {
+    check('英文手册存在', false, `缺少 ${files.en}`);
+    return;
+  }
+  check('英文手册存在', true);
+
+  const zh = measure(zhPath);
+  const en = measure(enPath);
+
+  check('标题数量一致（目录的行数）', zh.headings.length === en.headings.length,
+    `中 ${zh.headings.length} vs 英 ${en.headings.length}`);
+  check('标题层级序列一致（目录的嵌套结构）',
+    JSON.stringify(zh.headings) === JSON.stringify(en.headings),
+    `中 [${zh.headings.join(',')}] vs 英 [${en.headings.join(',')}]`);
+  check('代码块数量一致', zh.fences === en.fences, `中 ${zh.fences} vs 英 ${en.fences}`);
+  check('表格行数一致', zh.tableRows === en.tableRows, `中 ${zh.tableRows} vs 英 ${en.tableRows}`);
+
+  // 行数不要求完全相等（英文通常更长或更短），但不能差得太离谱，
+  // 差太多通常意味着漏译或大段增删。
+  const ratio = en.lines / zh.lines;
+  check('篇幅没有量级差异（英文 / 中文 在 0.6~1.8 之间）', ratio > 0.6 && ratio < 1.8,
+    `中 ${zh.lines} 行 vs 英 ${en.lines} 行，比值 ${ratio.toFixed(2)}`);
+
+  // 英文手册不该残留成片的中文（代码里的中文注释也应翻译）
+  const enText = fs.readFileSync(enPath, 'utf8');
+  const cjk = enText.match(/[\u4e00-\u9fa5]+/g) || [];
+  check('英文手册里没有残留的中文段落', cjk.length === 0,
+    cjk.length ? `残留 ${cjk.length} 处：${[...new Set(cjk)].slice(0, 10).join(' / ')}` : '');
 }
 
 // ============================================================ 主流程
@@ -618,6 +729,7 @@ async function main() {
   const originalConfig = fs.readFileSync(CONFIG_PATH, 'utf8');
 
   try {
+    testManualStructure();
     await testPureFunctions();
     await testResponseRewriting();
     await testAssetEdgeCases();

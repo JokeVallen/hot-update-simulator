@@ -15,7 +15,7 @@
 // 这里必须先加消毒（DOMPurify 之类）再插入。
 
 import { marked } from 'marked'
-import { t } from '../locales/index.js'
+import { t, getLocale } from '../locales/index.js'
 import { reportError } from '../ui/toast.js'
 import { esc } from '../ui/dom.js'
 import { View, pageHeader } from './common.js'
@@ -47,7 +47,8 @@ export class ManualView extends View {
     this.container.innerHTML = `
       ${pageHeader('manual.title', 'manual.intro')}
       <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-        <a class="btn btn-sm btn-outline-secondary" href="/manual.md?raw=1" target="_blank" rel="noopener">
+        <a class="btn btn-sm btn-outline-secondary" id="manualSourceLink"
+          href="/manual.md?raw=1" target="_blank" rel="noopener">
           <i class="bi bi-filetype-md"></i> ${esc(t('manual.viewSource'))}
         </a>
         <span class="small text-secondary">${esc(t('manual.sourceHint'))}</span>
@@ -65,11 +66,21 @@ export class ManualView extends View {
     const body = this.container.querySelector('#manualBody')
     if (!body) return
 
+    // 手册按语言分成独立文件（manual.zh-CN.md / manual.en.md），
+    // 和 locales/ 的结构保持一致。后端用白名单把语言代码映射成文件名。
+    const lang = getLocale()
+
+    // "查看原始 Markdown" 要指向当前语言的源文件
+    const sourceLink = this.container.querySelector('#manualSourceLink')
+    if (sourceLink) sourceLink.href = `/manual.md?lang=${encodeURIComponent(lang)}&raw=1`
+
     try {
       // 显式声明只要 markdown：后端在 /manual.md 上做了内容协商 ——
       // 浏览器直接打开（Accept 含 text/html）会被重定向到面板里的这个页面，
       // 而这里要的正是原始源文件。
-      const res = await fetch('/manual.md', { headers: { Accept: 'text/markdown, text/plain' } })
+      const res = await fetch(`/manual.md?lang=${encodeURIComponent(lang)}`, {
+        headers: { Accept: 'text/markdown, text/plain' },
+      })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const markdown = await res.text()
 
@@ -87,12 +98,13 @@ export class ManualView extends View {
       this.buildToc()
     } catch (err) {
       if (!this.isActive()) return
+      const missing = /HTTP 404/.test(err.message)
       body.innerHTML = `
-        <div class="alert alert-danger">
-          ${esc(t('manual.loadFailed'))}
+        <div class="alert alert-${missing ? 'warning' : 'danger'}">
+          ${esc(missing ? t('manual.missing', { lang }) : t('manual.loadFailed'))}
           <div class="small mono mt-1">${esc(err.message)}</div>
         </div>`
-      reportError(err, t('manual.title'))
+      if (!missing) reportError(err, t('manual.title'))
     }
   }
 

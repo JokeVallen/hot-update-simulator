@@ -7,8 +7,9 @@
 面向的使用者是 Unity 前端开发：不需要改后端代码，打开面板点几下，
 就能让接口变慢、让下载断流、让文件内容损坏。
 
-> 完整说明见 [`backend/public/manual.md`](backend/public/manual.md)，服务启动后
-> 也可以直接在浏览器里看 `http://localhost:5500/manual`（面板里渲染好的版本）。
+> 完整说明见 [`backend/public/manual.zh-CN.md`](backend/public/manual.zh-CN.md)（英文版是
+> [`manual.en.md`](backend/public/manual.en.md)），服务启动后也可以直接在浏览器里看
+> `http://localhost:5500/manual`——面板里渲染好的版本，带目录，跟着界面语言切换。
 
 ---
 
@@ -46,7 +47,7 @@ npm run build                  # 或者构建成静态文件，由后端直接�
 | **实时日志** | SSE 实时流，每条都标出被做了什么（`abort`、`+300ms`、`100Kbps`、`Range`…） |
 | **接口调试** | 直接调热更接口、看响应、下载资产测试耗时，用来现场验证模拟效果 |
 | **收藏** | 存下常用请求并重放（重放由服务器发起，会完整经过模拟器） |
-| **使用手册** | 手册渲染在面板内（带目录），源文件是 ackend/public/manual.md |
+| **使用手册** | 手册渲染在面板内（带目录）。中英文各一份：`manual.zh-CN.md` / `manual.en.md` |
 | **API 文档** | 侧栏项，新标签页打开 Swagger UI |
 
 顶栏常驻一个**急停**按钮和模拟状态指示。注意状态灯反映的是"客户端视角"：
@@ -73,7 +74,7 @@ npm run arch         # 结构：循环依赖 / 分层方向 / 孤儿模块 / 规
 请清楚这等于把"读写模拟参数 + 读取全部请求日志"开放给整个局域网。
 跨站的状态变更请求会被拒绝，错误响应也不回传磁盘路径。
 
-详见 [使用手册的安全边界一节](backend/public/manual.md)。
+详见 [使用手册的安全边界一节](backend/public/manual.zh-CN.md)。
 
 ---
 
@@ -157,7 +158,8 @@ backend/
     requestPipeline.js    组合上面两个模拟器
     loggerMiddleware.js   记录请求的最终结果
   routes/                 26 个接口，Swagger 注解写在文件里
-  public/manual.md        使用手册（含 Unity C# 接入示例）
+  public/manual.zh-CN.md  使用手册·中文（含 Unity C# 接入示例）
+  public/manual.en.md     使用手册·英文
 storage/                  运行时数据，已 gitignore
   assets/{平台}/...       热更包放这里，不用手写清单
 frontend/                 Vite + Bootstrap 面板（原生 JS，无框架）
