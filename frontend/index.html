@@ -6,6 +6,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <title data-i18n="app.title">热更新模拟器</title>
+    <!--
+      在样式表生效之前就把主题定下来。
+      放在这里而不是 main.js 里，是因为 main.js 是 module，会延迟到 HTML 解析完
+      才执行 —— 那时页面已经用 html 标签上的默认主题画过一帧了，切主题时会看到
+      明显的闪白/闪黑（FOUC）。
+      这段逻辑必须和 src/ui/theme.js 保持一致。
+    -->
+    <script>
+        (function () {
+            var theme = 'system';
+            try { theme = localStorage.getItem('hus.theme') || 'system'; } catch (e) { /* 隐私模式 */ }
+            var dark = theme === 'dark'
+                || (theme === 'system'
+                    && window.matchMedia
+                    && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            var resolved = dark ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-bs-theme', resolved);
+            document.documentElement.style.colorScheme = resolved;
+        })();
+    </script>
 </head>
 
 <body>
@@ -97,6 +117,13 @@
                 <select class="form-select form-select-sm w-auto" id="husLocaleSelect" aria-label="Language">
                     <option value="zh-CN">中文</option>
                     <option value="en">English</option>
+                </select>
+
+                <select class="form-select form-select-sm w-auto" id="husThemeSelect"
+                    data-i18n-title="theme.label" aria-label="Theme">
+                    <option value="light" data-i18n="theme.light">浅色</option>
+                    <option value="dark" data-i18n="theme.dark">深色</option>
+                    <option value="system" data-i18n="theme.system">跟随系统</option>
                 </select>
             </header>
 

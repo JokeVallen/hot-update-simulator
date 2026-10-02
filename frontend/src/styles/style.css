@@ -2,9 +2,13 @@
  *
  * 主题与布局。
  *
- * 基调是深色的开发工具风格：这个面板会被长时间挂在旁边看日志，
- * 浅色背景在暗环境下太刺眼。用 Bootstrap 5.3 的 CSS 变量做覆盖，
- * 这样 Bootstrap 组件（表单、卡片、徽章）会自动跟着变，不用逐个改。
+ * 支持浅色 / 深色 / 跟随系统三种。做法是用 Bootstrap 5.3 的 CSS 变量：
+ * 所有 Bootstrap 组件（表单、卡片、徽章）都读 `--bs-*`，而这些变量由
+ * `data-bs-theme` 属性决定，所以切主题只要改这一个属性。
+ *
+ * 面板自己用到的颜色也全部收敛成 `--hus-*` 变量，并且**按主题给两套值**。
+ * 图表（Chart.js）的颜色也从这里读 —— 否则 JS 里就得写死两套配色，
+ * 改主题时两边容易不同步。
  */
 
 :root {
@@ -14,6 +18,7 @@
     "Liberation Mono", monospace;
 }
 
+/* ------------------------------------------------------------ 深色 */
 html[data-bs-theme="dark"] {
   --bs-body-bg: #14171c;
   --bs-body-color: #d6dae0;
@@ -22,6 +27,65 @@ html[data-bs-theme="dark"] {
   --bs-border-color: #2c323c;
   --bs-primary: #4c8dff;
   --bs-primary-rgb: 76, 141, 255;
+
+  /* 面板专用的语义色 */
+  --hus-row-divider: rgba(255, 255, 255, 0.04);
+  --hus-ok: #38d39f;
+  --hus-bad: #ff5c5c;
+  --hus-warn: #ffc14d;
+  --hus-warn-fg: #ffc14d;
+  --hus-warn-bg: rgba(255, 193, 77, 0.15);
+  --hus-neutral: #8b93a1;
+
+  /* 图表配色。图表把颜色"烤"进实例里，改主题时需要重画，
+     所以这些值同时也作为"当前该用哪套色"的事实来源。 */
+  --hus-chart-grid: rgba(255, 255, 255, 0.08);
+  --hus-chart-tick: #8b93a1;
+  --hus-chart-requests: #4c8dff;
+  --hus-chart-requests-fill: rgba(76, 141, 255, 0.15);
+  --hus-chart-errors: #ff5c5c;
+  --hus-chart-errors-fill: rgba(255, 92, 92, 0.15);
+  --hus-status-2xx: #38d39f;
+  --hus-status-3xx: #4cc9f0;
+  --hus-status-4xx: #ffc14d;
+  --hus-status-5xx: #ff5c5c;
+  --hus-status-none: #8b93a1;
+}
+
+/* ------------------------------------------------------------ 浅色
+ *
+ * Bootstrap 自带一整套浅色变量，所以这里只覆盖我们真正要调的部分：
+ * 背景层次（默认的纯白在长时间盯日志时偏刺眼）、以及**在浅底上对比度不够的
+ * 那几个语义色** —— 深色主题里的亮黄 #ffc14d、亮青 #4cc9f0 直接放到白底上
+ * 会看不清，必须压深一档。 */
+html[data-bs-theme="light"] {
+  --bs-body-bg: #f6f7f9;
+  --bs-body-color: #1f2329;
+  --bs-secondary-bg: #ffffff;
+  --bs-tertiary-bg: #eef0f3;
+  --bs-border-color: #d8dce2;
+  --bs-primary: #0d6efd;
+  --bs-primary-rgb: 13, 110, 253;
+
+  --hus-row-divider: rgba(0, 0, 0, 0.06);
+  --hus-ok: #12a06f;
+  --hus-bad: #d92d20;
+  --hus-warn: #b8791a;
+  --hus-warn-fg: #8a5a00;
+  --hus-warn-bg: rgba(184, 121, 26, 0.13);
+  --hus-neutral: #767e89;
+
+  --hus-chart-grid: rgba(0, 0, 0, 0.08);
+  --hus-chart-tick: #6c757d;
+  --hus-chart-requests: #0d6efd;
+  --hus-chart-requests-fill: rgba(13, 110, 253, 0.15);
+  --hus-chart-errors: #d92d20;
+  --hus-chart-errors-fill: rgba(217, 45, 32, 0.15);
+  --hus-status-2xx: #12a06f;
+  --hus-status-3xx: #0d8fbf;
+  --hus-status-4xx: #b8791a;
+  --hus-status-5xx: #d92d20;
+  --hus-status-none: #767e89;
 }
 
 body {
@@ -161,9 +225,9 @@ body {
   vertical-align: middle;
 }
 
-.status-dot.ok { background: #38d39f; }
-.status-dot.bad { background: #ff5c5c; }
-.status-dot.warn { background: #ffc14d; }
+.status-dot.ok { background: var(--hus-ok); }
+.status-dot.bad { background: var(--hus-bad); }
+.status-dot.warn { background: var(--hus-warn); }
 
 /* 模拟中时缓慢呼吸，提醒你现在的数据是"假的" */
 .sim-indicator.active {
@@ -259,7 +323,7 @@ body {
 
 .hus-log-table tbody td {
   padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--hus-row-divider);
   vertical-align: top;
 }
 
@@ -269,7 +333,7 @@ body {
 
 /* 被模拟器干预过的行给个左侧色条，扫一眼就能挑出来 */
 .hus-log-table tbody tr.simulated td:first-child {
-  box-shadow: inset 3px 0 0 var(--bs-warning);
+  box-shadow: inset 3px 0 0 var(--hus-warn);
 }
 
 .log-scroll {
@@ -286,8 +350,8 @@ body {
   font-size: 0.6875rem;
   padding: 0.1rem 0.35rem;
   border-radius: 0.25rem;
-  background: rgba(255, 193, 77, 0.15);
-  color: #ffc14d;
+  background: var(--hus-warn-bg);
+  color: var(--hus-warn-fg);
   white-space: nowrap;
   margin-right: 0.2rem;
   display: inline-block;

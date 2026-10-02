@@ -367,6 +367,24 @@ async function testResponseRewriting() {
       sgTrunc.body.length === target,
       `收到 ${sgTrunc.body.length}，期望 ${target}`);
 
+    // ---------------- chunked + corrupt ----------------
+    //
+    // 这个组合原来完全没测到，而它藏着一个静默的数据丢失 bug：
+    // res.write 里 corrupt 只调 handleStreaming，而后者在没有 Content-Length 时
+    // 直接 return false（一个字节都不写），返回值又被忽略 ——
+    // 于是中间所有分片凭空消失，只有 end 的最后一片被 handleBuffered 接住。
+    // 客户端拿到的是一份**残缺**的响应，而且没有任何错误信号。
+    clearFaults();
+    addRule({ id: 'r6', name: 'chunked-corrupt', match: { pathPrefix: '/chunked' }, action: { type: 'corrupt', ratio: 0.5 } });
+    const chCorrupt = await request(port, '/chunked');
+    check('chunked + corrupt：字节数不变（损坏不改长度，但绝不能丢数据）',
+      chCorrupt.body.length === FULL,
+      `收到 ${chCorrupt.body.length} / ${FULL} 字节`
+        + (chCorrupt.body.length < FULL ? ' —— 分片在中途被丢弃了' : ''));
+    check('chunked + corrupt：内容确实被改坏了（否则等于没注入）',
+      !chCorrupt.body.equals(Buffer.alloc(FULL, 0x41)),
+      '收到的是完整原始内容，说明损坏没有生效');
+
     // ---------------- 流式 + truncate 精度（不能超发一个 chunk） ----------------
     clearFaults();
     addRule({ id: 'r5', name: 'chunked-truncate-exact', match: { pathPrefix: '/chunked' }, action: { type: 'truncate', ratio: 0.4 } });

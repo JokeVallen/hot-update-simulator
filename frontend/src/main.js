@@ -23,6 +23,7 @@ import { api } from './api.js'
 import { toastSuccess, reportError, toastWarn } from './ui/toast.js'
 import { initSidebar } from './ui/sidebar.js'
 import { esc } from './ui/dom.js'
+import { initTheme, setTheme, getTheme } from './ui/theme.js'
 
 import { DashboardView } from './views/dashboard.js'
 import { NetworkView } from './views/network.js'
@@ -178,11 +179,25 @@ function bindTopbar() {
       renderTopbar()
     })
   }
+
+  const themeSelect = document.getElementById('husThemeSelect')
+  if (themeSelect) {
+    themeSelect.value = getTheme()
+    themeSelect.addEventListener('change', () => {
+      // 不需要重挂视图：颜色全在 CSS 变量里，切属性就生效了。
+      // 唯一例外是把颜色"烤"进实例的图表 —— 它们订阅了主题变化自己重画。
+      setTheme(themeSelect.value)
+    })
+  }
 }
 
 // ------------------------------------------------------------------ 启动
 
 async function main() {
+  // 主题要在挂载视图之前定下来：仪表盘的图表会把 CSS 变量里的颜色读出来
+  // "烤"进 Chart 实例，晚一步就会用错主题的配色。
+  initTheme()
+
   await initI18n()
 
   sidebar = initSidebar({ onSelect: navigate })

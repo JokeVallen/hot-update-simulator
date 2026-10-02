@@ -11,9 +11,22 @@ import Chart from 'chart.js/auto'
 import { t } from '../locales/index.js'
 import { loadStats, state } from '../store.js'
 import { esc, fmtBytes, fmtDuration } from '../ui/dom.js'
+import { onThemeChange } from '../ui/theme.js'
 import { View, pageHeader, statCard, card, emptyState } from './common.js'
 
 const WINDOWS = [1, 5, 15, 60]
+
+/**
+ * 从 CSS 变量里读当前主题的颜色。
+ *
+ * 为什么绕这一下：Chart.js 会把颜色"烤"进实例里，如果用 JS 常量定义配色，
+ * 就得到处写 `theme === 'dark' ? A : B`，改主题时两边必然不同步。
+ * 颜色统一在 style.css 的主题块里定义，这里只负责读。
+ */
+function cssVar(name, fallback = '#888888') {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
 
 export class DashboardView extends View {
   constructor() {
@@ -68,6 +81,12 @@ export class DashboardView extends View {
    */
   async setup() {
     this.every(3000, () => this.refresh())
+
+    // 主题一变必须重画图表：颜色是构造时读出来烤进实例的。
+    // 订阅放在 setup() 而不是 render()，否则每次 refresh 都会多攒一个监听器。
+    this.offTheme = onThemeChange(() => {
+      if (this.isActive()) this.paint()
+    })
   }
 
   async refresh() {
@@ -237,8 +256,8 @@ export class DashboardView extends View {
           {
             label: t('dashboard.requests'),
             data: timeline.map((s) => s.count),
-            borderColor: '#4c8dff',
-            backgroundColor: 'rgba(76, 141, 255, 0.15)',
+            borderColor: cssVar('--hus-chart-requests'),
+            backgroundColor: cssVar('--hus-chart-requests-fill'),
             fill: true,
             tension: 0.3,
             pointRadius: 0,
@@ -247,8 +266,8 @@ export class DashboardView extends View {
           {
             label: t('dashboard.errors'),
             data: timeline.map((s) => s.errors),
-            borderColor: '#ff5c5c',
-            backgroundColor: 'rgba(255, 92, 92, 0.15)',
+            borderColor: cssVar('--hus-chart-errors'),
+            backgroundColor: cssVar('--hus-chart-errors-fill'),
             fill: true,
             tension: 0.3,
             pointRadius: 0,
@@ -261,10 +280,21 @@ export class DashboardView extends View {
         maintainAspectRatio: false,
         animation: false,
         interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { labels: { boxWidth: 10, font: { size: 11 } } } },
+        plugins: {
+          legend: {
+            labels: { boxWidth: 10, font: { size: 11 }, color: cssVar('--hus-chart-tick') },
+          },
+        },
         scales: {
-          x: { ticks: { maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
-          y: { beginAtZero: true, ticks: { precision: 0, font: { size: 10 } } },
+          x: {
+            ticks: { maxTicksLimit: 8, font: { size: 10 }, color: cssVar('--hus-chart-tick') },
+            grid: { display: false },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: { precision: 0, font: { size: 10 }, color: cssVar('--hus-chart-tick') },
+            grid: { color: cssVar('--hus-chart-grid') },
+          },
         },
       },
     })
@@ -278,11 +308,11 @@ export class DashboardView extends View {
 
     const entries = Object.entries(byStatusClass).filter(([, v]) => v > 0)
     const COLORS = {
-      '2xx': '#38d39f',
-      '3xx': '#4cc9f0',
-      '4xx': '#ffc14d',
-      '5xx': '#ff5c5c',
-      disconnected: '#8b93a1',
+      '2xx': cssVar('--hus-status-2xx'),
+      '3xx': cssVar('--hus-status-3xx'),
+      '4xx': cssVar('--hus-status-4xx'),
+      '5xx': cssVar('--hus-status-5xx'),
+      disconnected: cssVar('--hus-status-none'),
     }
 
     if (!entries.length) {
@@ -297,7 +327,7 @@ export class DashboardView extends View {
         labels: entries.map(([key]) => (key === 'disconnected' ? t('logs.result') : key)),
         datasets: [{
           data: entries.map(([, v]) => v),
-          backgroundColor: entries.map(([key]) => COLORS[key] || '#8b93a1'),
+          backgroundColor: entries.map(([key]) => COLORS[key] || cssVar('--hus-status-none')),
           borderWidth: 0,
         }],
       },
@@ -306,12 +336,19 @@ export class DashboardView extends View {
         maintainAspectRatio: false,
         animation: false,
         cutout: '62%',
-        plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } },
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { boxWidth: 10, font: { size: 11 }, color: cssVar('--hus-chart-tick') },
+          },
+        },
       },
     })
   }
 
   destroy() {
+    if (this.offTheme) this.offTheme()
+    this.offTheme = null
     if (this.timelineChart) this.timelineChart.destroy()
     if (this.statusChart) this.statusChart.destroy()
     this.timelineChart = null

@@ -353,8 +353,96 @@ async function main() {
       conn.cls.includes('ok'),
       `状态点 class=${conn.cls}`);
 
-    // ---------------------------------------------------------- 故障规则编辑器
+    // ---------------------------------------------------------- 主题切换
     //
+    // 光看 data-bs-theme 属性不够 —— 属性设对了但 CSS 没跟上（比如变量名写错）
+    // 一样是坏的。所以这里读**实际算出来的背景色**，确认亮暗确实换过来了。
+    console.log('\n主题切换');
+
+    const themeProbe = `(() => {
+      const sel = document.getElementById('husThemeSelect');
+      const cs = getComputedStyle(document.body);
+      return JSON.stringify({
+        attr: document.documentElement.getAttribute('data-bs-theme'),
+        colorScheme: document.documentElement.style.colorScheme,
+        bg: cs.backgroundColor,
+        fg: cs.color,
+        stored: localStorage.getItem('hus.theme'),
+        selected: sel ? sel.value : null,
+      });
+    })()`;
+
+    const readTheme = async () => JSON.parse(
+      (await cdp.send('Runtime.evaluate', { expression: themeProbe, returnByValue: true })).result.value,
+    );
+
+    const setThemeValue = async (value) => {
+      await cdp.send('Runtime.evaluate', {
+        expression: `(() => {
+          const sel = document.getElementById('husThemeSelect');
+          sel.value = ${JSON.stringify(value)};
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        })()`,
+      });
+      await sleep(250);
+      return readTheme();
+    };
+
+    /** 把 rgb(a) 三个通道平均一下，用来判断"亮"还是"暗"。 */
+    const brightness = (rgb) => {
+      const m = String(rgb).match(/\d+/g);
+      if (!m || m.length < 3) return null;
+      return (Number(m[0]) + Number(m[1]) + Number(m[2])) / 3;
+    };
+
+    const light = await setThemeValue('light');
+    check('切到浅色：data-bs-theme 变成 light',
+      light.attr === 'light', `实际 ${light.attr}`);
+    check('切到浅色：背景确实是亮的（不是只改了属性）',
+      brightness(light.bg) > 180, `背景 ${light.bg}，亮度 ${brightness(light.bg)}`);
+    check('切到浅色：文字与背景反差足够（深色字）',
+      brightness(light.fg) < 100, `文字 ${light.fg}，亮度 ${brightness(light.fg)}`);
+
+    const dark = await setThemeValue('dark');
+    check('切到深色：data-bs-theme 变成 dark',
+      dark.attr === 'dark', `实际 ${dark.attr}`);
+    check('切到深色：背景确实是暗的',
+      brightness(dark.bg) < 60, `背景 ${dark.bg}，亮度 ${brightness(dark.bg)}`);
+    check('切到深色：文字是浅色的',
+      brightness(dark.fg) > 150, `文字 ${dark.fg}，亮度 ${brightness(dark.fg)}`);
+
+    // 「跟随系统」要真的去问系统，而不是固定成某一套
+    const systemInfo = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const sel = document.getElementById('husThemeSelect');
+        sel.value = 'system';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return JSON.stringify({ prefersDark: window.matchMedia('(prefers-color-scheme: dark)').matches });
+      })()`,
+      returnByValue: true,
+    });
+    const prefersDark = JSON.parse(systemInfo.result.value).prefersDark;
+    await sleep(250);
+    const system = await readTheme();
+    check('切到跟随系统：解析结果与系统的偏好一致',
+      system.attr === (prefersDark ? 'dark' : 'light'),
+      `系统偏好 ${prefersDark ? '深色' : '浅色'}，实际 ${system.attr}`);
+
+    check('主题选择写进了 localStorage（刷新后还在）',
+      system.stored === 'system', `实际 ${system.stored}`);
+
+    // 刷新一次，确认选择真的持久化了
+    await cdp.send('Page.navigate', { url: `${TARGET_URL}/?ui-check=theme-persist#/dashboard` });
+    await sleep(2000);
+    const afterReload = await readTheme();
+    check('刷新后主题选择仍然保留',
+      afterReload.selected === 'system', `下拉框实际值 ${afterReload.selected}`);
+
+    // 换回深色收尾，后面的截图才是深色的
+    await setThemeValue('dark');
+
+    // ---------------------------------------------------------- 故障规则编辑器
+   //
     // 这一段是补上的：原来的界面检查只验证"路由能渲染"和三个按钮，
     // 从没点过「新增规则」。而恰恰是这个按钮 100% 报错 ——
     // bindEditor() 在编辑器 HTML 写入之前执行，querySelector 拿到 null
@@ -472,10 +560,10 @@ async function main() {
           for (const zone of zones) {
             if (!zone) continue;
             const clone = zone.cloneNode(true);
-            // 只排除语言下拉框（「中文」是语言的自称，故意保留）。
-            // 手册正文与目录都在扫描范围内 —— 手册已经中英各一份，
-            // 英文界面下它们不该再出现中文。
-            clone.querySelectorAll('select').forEach((n) => n.remove());
+            // 只排除**语言**下拉框：「中文」是语言的自称，英文界面里也该显示
+            // 「中文」而不是 "Chinese"。除此之外一切都在扫描范围内 ——
+            // 包括手册正文和目录，以及主题下拉框的选项文案。
+            clone.querySelectorAll('#husLocaleSelect').forEach((n) => n.remove());
             const text = clone.innerText || clone.textContent || '';
             const matches = text.match(/[\\u4e00-\\u9fa5]+/g);
             if (matches) found.push(...matches);
@@ -508,7 +596,7 @@ async function main() {
         for (const zone of zones) {
           if (!zone) continue;
           const clone = zone.cloneNode(true);
-          clone.querySelectorAll('select').forEach((n) => n.remove());
+          clone.querySelectorAll('#husLocaleSelect').forEach((n) => n.remove());
           const text = clone.innerText || clone.textContent || '';
           const matches = text.match(/[\\u4e00-\\u9fa5]+/g);
           if (matches) found.push(...matches);

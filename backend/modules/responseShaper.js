@@ -327,14 +327,23 @@ function install(req, res, { shape = null, throttleKbps = 0 } = {}) {
     }
 
     const buf = toBuffer(chunk, encoding);
-    if (mode === 'corrupt') {
-      handleStreaming(buf);
-    } else if (mode) {
-      if (declaredLength() !== null) handleStreaming(buf);
-      else handleBuffered(buf);
-    } else {
+    // 三种模式走同一套分支判断。
+    //
+    // 这里原来给 corrupt 单独开了一条 `if (mode === 'corrupt') handleStreaming(buf)`，
+    // 少了 declaredLength() 检查 —— 而 handleStreaming 在不知道总长度时会直接
+    // return false 且**一个字节都不写**，返回值又被忽略。结果是：
+    // 对一个 chunked 响应注入 corrupt，客户端收到 **0 字节**，
+    // 而且没有任何错误信号。res.end 里那份同样的判断反而是对的（有 fallback），
+    // 所以只有"中间分片"这一段被吞掉，症状更隐蔽。
+    if (!mode) {
       // 只限速
       pacedWrite(buf);
+    } else if (declaredLength() !== null) {
+      // 知道总长度，可以边收边发
+      handleStreaming(buf);
+    } else {
+      // 不知道总长度（chunked）：必须先攒齐才能算切点
+      handleBuffered(buf);
     }
 
     if (typeof callback === 'function') callback();
@@ -364,14 +373,12 @@ function install(req, res, { shape = null, throttleKbps = 0 } = {}) {
     }
 
     if (buf && buf.length) {
-      if (mode === 'corrupt') {
-        if (declaredLength() !== null) handleStreaming(buf);
-        else handleBuffered(buf);
-      } else if (mode) {
-        if (declaredLength() !== null) handleStreaming(buf);
-        else handleBuffered(buf);
-      } else {
+      if (!mode) {
         pacedWrite(buf);
+      } else if (declaredLength() !== null) {
+        handleStreaming(buf);
+      } else {
+        handleBuffered(buf);
       }
     }
 
