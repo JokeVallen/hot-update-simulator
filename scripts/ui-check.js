@@ -22,7 +22,7 @@ const path = require('path');
 
 const TARGET_URL = (process.argv[2] || 'http://127.0.0.1:5500').replace(/\/$/, '');
 const DEBUG_PORT = 9333;
-const ROUTES = ['dashboard', 'network', 'faults', 'presets', 'logs', 'explorer', 'favorites'];
+const ROUTES = ['dashboard', 'network', 'faults', 'presets', 'logs', 'explorer', 'favorites', 'manual'];
 
 const CHROME_CANDIDATES = [
   'D:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',

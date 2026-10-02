@@ -350,6 +350,152 @@ body {
   margin-bottom: 0.75rem;
 }
 
+/* ------------------------------------------------------------ Markdown 内容
+
+   用于在面板里渲染使用手册。Bootstrap 不带 markdown 样式，
+   而手册里有大量代码块和表格，不专门排版会很难看。 */
+
+.hus-markdown {
+  max-width: 82ch;
+  line-height: 1.75;
+  font-size: 0.9375rem;
+}
+
+.hus-markdown > *:first-child { margin-top: 0; }
+.hus-markdown > *:last-child { margin-bottom: 0; }
+
+.hus-markdown h1,
+.hus-markdown h2,
+.hus-markdown h3,
+.hus-markdown h4 {
+  margin: 2rem 0 0.75rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.hus-markdown h1 { font-size: 1.5rem; }
+.hus-markdown h2 {
+  font-size: 1.2rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+.hus-markdown h3 { font-size: 1.05rem; }
+.hus-markdown h4 { font-size: 0.9375rem; }
+
+.hus-markdown p { margin: 0 0 1rem; }
+
+.hus-markdown a {
+  color: var(--bs-primary);
+  text-decoration: none;
+}
+.hus-markdown a:hover { text-decoration: underline; }
+
+.hus-markdown ul,
+.hus-markdown ol {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+}
+.hus-markdown li { margin-bottom: 0.3rem; }
+
+/* 行内代码 */
+.hus-markdown code {
+  font-family: var(--hus-mono);
+  font-size: 0.85em;
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.35rem;
+}
+
+/* 代码块 */
+.hus-markdown pre {
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.5rem;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  line-height: 1.6;
+}
+.hus-markdown pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.8125rem;
+}
+
+.hus-markdown table {
+  width: 100%;
+  margin: 0 0 1.25rem;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.hus-markdown th,
+.hus-markdown td {
+  border: 1px solid var(--bs-border-color);
+  padding: 0.5rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+.hus-markdown th {
+  background: var(--bs-tertiary-bg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.hus-markdown blockquote {
+  margin: 0 0 1.25rem;
+  padding: 0.6rem 1rem;
+  border-left: 3px solid var(--bs-primary);
+  background: rgba(var(--bs-primary-rgb), 0.07);
+  border-radius: 0 0.35rem 0.35rem 0;
+  color: var(--bs-body-color);
+}
+.hus-markdown blockquote > *:last-child { margin-bottom: 0; }
+
+.hus-markdown hr {
+  margin: 2rem 0;
+  border-color: var(--bs-border-color);
+  opacity: 1;
+}
+
+.hus-markdown img { max-width: 100%; height: auto; }
+
+/* 手册的目录侧栏（宽屏下与正文并排） */
+.hus-manual-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+@media (min-width: 1200px) {
+  .hus-manual-layout {
+    grid-template-columns: 16rem minmax(0, 1fr);
+  }
+}
+.hus-manual-toc {
+  align-self: start;
+  position: sticky;
+  top: calc(var(--hus-topbar-height) + 1.5rem);
+  max-height: calc(100vh - var(--hus-topbar-height) - 3rem);
+  overflow-y: auto;
+  font-size: 0.8125rem;
+}
+.hus-manual-toc a {
+  display: block;
+  color: var(--bs-secondary-color);
+  text-decoration: none;
+  padding: 0.2rem 0;
+  border-left: 2px solid transparent;
+  padding-left: 0.6rem;
+}
+.hus-manual-toc a:hover { color: var(--bs-body-color); }
+.hus-manual-toc a.active {
+  color: var(--bs-primary);
+  border-left-color: var(--bs-primary);
+}
+.hus-manual-toc a.level-3 { padding-left: 1.4rem; }
+.hus-manual-toc a.level-4 { padding-left: 2.2rem; }
+
 /* ------------------------------------------------------------ 响应式 */
 
 .hus-sidebar-toggle {

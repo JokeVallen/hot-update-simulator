@@ -22,7 +22,7 @@ const server = app.listen(port, host, () => {
   console.log('  热更新模拟器已启动');
   console.log(`  本机地址   http://localhost:${port}`);
   console.log(`  接口文档   http://localhost:${port}/docs`);
-  console.log(`  使用手册   http://localhost:${port}/manual.md`);
+  console.log(`  使用手册   http://localhost:${port}/manual`);
   console.log(`  配置文件   ${configManager.configPath}`);
   console.log(`  资产目录   ${assetRoot}`);
   console.log(`  可用平台   ${platforms.length ? platforms.join(', ') : '（空，请把热更包放进资产目录）'}`);

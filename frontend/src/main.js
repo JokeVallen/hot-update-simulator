@@ -31,6 +31,7 @@ import { PresetsView } from './views/presets.js'
 import { LogsView } from './views/logs.js'
 import { ExplorerView } from './views/explorer.js'
 import { FavoritesView } from './views/favorites.js'
+import { ManualView } from './views/manual.js'
 
 const ROUTES = {
   dashboard: DashboardView,
@@ -40,6 +41,7 @@ const ROUTES = {
   logs: LogsView,
   explorer: ExplorerView,
   favorites: FavoritesView,
+  manual: ManualView,
 }
 
 const DEFAULT_ROUTE = 'dashboard'

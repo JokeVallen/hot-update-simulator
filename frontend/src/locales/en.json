@@ -10,7 +10,8 @@
     "presets": "Presets",
     "logs": "Live Logs",
     "explorer": "API Console",
-    "favorites": "Favorites"
+    "favorites": "Favorites",
+    "manual": "Manual"
   },
   "common": {
     "apply": "Apply",
@@ -243,6 +244,14 @@
     "created": "Favorite added",
     "deleted": "Favorite deleted",
     "empty": "No favorites yet. Make a call in API Console, then save it here."
+  },
+  "manual": {
+    "title": "Manual",
+    "intro": "Feature guide, configuration details, Unity integration sample and troubleshooting. This renders backend/public/manual.md — refresh to pick up edits.",
+    "toc": "Contents",
+    "viewSource": "View raw Markdown",
+    "sourceHint": "Use this when you need to copy content or download the source",
+    "loadFailed": "Failed to load the manual"
   },
   "errors": {
     "networkDown": "Cannot reach the backend — make sure the server is running",

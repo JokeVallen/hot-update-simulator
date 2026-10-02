@@ -241,11 +241,27 @@ if (serverCfg.enableBrowse !== false && process.env.NODE_ENV !== 'production') {
   app.use('/browse', express.static(publicDir), serveIndex(publicDir, { icons: true }));
 }
 
-// 使用手册
+// 使用手册。两个入口，各司其职：
+//
+//   /manual       → 跳到面板里渲染好的页面（给人读的）
+//   /manual.md    → 原始的 markdown 源文件（给 curl / 编辑器 / 下载用）
+//
+// 但直接在地址栏打开 /manual.md 时，用户期望的是一个能读的页面，
+// 而不是满屏的 # 和 |（浏览器对 text/markdown 只会当纯文本显示）。
+// 所以这里做内容协商：请求头带 text/html（浏览器顶层导航的特征）就转到面板；
+// fetch() 默认发 */*，因此仍然拿到源文件；想强制要源文件就加 ?raw=1。
+app.get('/manual', (req, res) => res.redirect('/#/manual'));
+
 app.get('/manual.md', (req, res) => {
+  const wantsRaw = req.query.raw === '1';
+  const accept = String(req.get('accept') || '');
+  if (!wantsRaw && accept.includes('text/html')) {
+    return res.redirect('/#/manual');
+  }
+
   const manualPath = path.join(__dirname, 'public', 'manual.md');
   res.type('text/markdown; charset=utf-8');
-  res.sendFile(manualPath, (err) => {
+  return res.sendFile(manualPath, (err) => {
     if (err && !res.headersSent) {
       res.status(404).type('text/plain; charset=utf-8').send('手册文件不存在');
     }
@@ -268,7 +284,7 @@ app.get('/', (req, res) => {
     '<meta charset="utf-8"><h3>后端已启动</h3>'
     + '<p>前端还没构建。执行 <code>npm run build</code>，'
     + '或另开一个终端跑 <code>cd frontend &amp;&amp; npm run dev</code>。</p>'
-    + '<p>接口文档：<a href="/docs">/docs</a>　使用手册：<a href="/manual.md">/manual.md</a></p>',
+    + '<p>接口文档：<a href="/docs">/docs</a>　使用手册：<a href="/manual">/manual</a></p>',
   );
 });
 

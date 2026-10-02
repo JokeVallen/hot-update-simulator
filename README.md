@@ -8,7 +8,7 @@
 就能让接口变慢、让下载断流、让文件内容损坏。
 
 > 完整说明见 [`backend/public/manual.md`](backend/public/manual.md)，服务启动后
-> 也可以直接在浏览器里看 `http://localhost:5500/manual.md`。
+> 也可以直接在浏览器里看 `http://localhost:5500/manual`（面板里渲染好的版本）。
 
 ---
 
@@ -23,7 +23,7 @@ npm start            # 启动，默认 http://localhost:5500
 | 地址 | 说明 |
 |---|---|
 | http://localhost:5500/docs | Swagger 接口文档，可直接试调 |
-| http://localhost:5500/manual.md | 使用手册 |
+| http://localhost:5500/manual | 使用手册（面板里渲染好的，带目录） |
 | http://localhost:5500/api/system | 确认用的是哪份配置、资产目录在哪 |
 
 前端面板（另开一个终端）：

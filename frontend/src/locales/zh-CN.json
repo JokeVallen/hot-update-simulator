@@ -10,7 +10,8 @@
     "presets": "预置方案",
     "logs": "实时日志",
     "explorer": "接口调试",
-    "favorites": "收藏"
+    "favorites": "收藏",
+    "manual": "使用手册"
   },
   "common": {
     "apply": "应用",
@@ -243,6 +244,14 @@
     "created": "收藏已添加",
     "deleted": "收藏已删除",
     "empty": "还没有收藏。去「接口调试」里调一次接口，然后把它存下来。"
+  },
+  "manual": {
+    "title": "使用手册",
+    "intro": "功能说明、配置详解、Unity 接入示例与排查方法。内容就是 backend/public/manual.md，改完刷新即可。",
+    "toc": "目录",
+    "viewSource": "查看原始 Markdown",
+    "sourceHint": "需要复制内容或下载源文件时用左边这个",
+    "loadFailed": "手册加载失败"
   },
   "errors": {
     "networkDown": "无法连接到后端服务，请确认服务器正在运行",
