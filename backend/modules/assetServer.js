@@ -239,8 +239,13 @@ class AssetServer {
     res.setHeader('Last-Modified', lastModified);
     res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
     res.setHeader('Accept-Ranges', 'bytes');
-    // 便于在浏览器/抓包工具里确认到底下的是哪个版本
-    res.setHeader('X-Asset-Platform', String(platform));
+    // 便于在浏览器/抓包工具里确认到底下的是哪个版本。
+    //
+    // 必须 percent-encode：HTTP 头的值只能是 ASCII，而平台名是使用者随便起的
+    // 目录名。实测平台名叫「微信小游戏」时 setHeader 直接抛 ERR_INVALID_CHAR，
+    // 整个下载变成 500 / 连接中断 —— 而 /api/version 和 /api/manifest 走
+    // JSON body 完全正常，于是表现为"版本查得到、文件下不来"这种很难查的现象。
+    res.setHeader('X-Asset-Platform', encodeURIComponent(String(platform)));
     res.setHeader('X-Asset-Size', String(stat.size));
 
     // 0 字节文件是合法的空资源（上传中断留下的空包就长这样）。

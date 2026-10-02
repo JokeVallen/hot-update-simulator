@@ -24,6 +24,9 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+// 不能用 fs.rmSync 删目录：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
+// 详见 scripts/lib/safe-rm.js 的说明。
+const { removeDir } = require('./lib/safe-rm');
 
 const CONFIG_PATH = path.resolve(__dirname, '..', 'backend', 'config.json');
 const ASSETS_ROOT = path.resolve(__dirname, '..', 'storage', 'assets');
@@ -652,8 +655,103 @@ async function testAssetEdgeCases() {
     check('?raw=1 时即使浏览器也拿到源文件',
       rawForced.status === 200 && String(rawForced.headers['content-type']).includes('text/markdown'),
       `状态 ${rawForced.status}, type=${rawForced.headers['content-type']}`);
+
+    // ---------------- 平台名不是只有 Android / iOS ----------------
+    //
+    // 平台就是资产目录下的一级子目录名，没有任何硬编码清单。
+    // 这里用**非 ASCII** 的名字，是因为它会踩到一个很隐蔽的坑：
+    // 响应头 X-Asset-Platform 的值只能是 ASCII，直接塞中文会让 setHeader
+    // 抛 ERR_INVALID_CHAR —— 而 /api/version、/api/manifest 走 JSON body
+    // 完全正常，于是表现为"版本查得到、文件下不来"这种很难查的现象。
+    section('平台名（含非 ASCII）');
+
+    const oddPlatform = 'UnicodeProbe平台';
+    const oddDir = path.join(ASSETS_ROOT, oddPlatform);
+    const cnPlatform = '微信小游戏';
+    const cnDir = path.join(ASSETS_ROOT, cnPlatform);
+
+    try {
+      fs.mkdirSync(path.join(oddDir, 'bundles'), { recursive: true });
+      fs.writeFileSync(path.join(oddDir, 'manifest.json'),
+        JSON.stringify({ version: '9.9.9', minVersion: '1.0.0', notice: 'probe' }));
+      fs.writeFileSync(path.join(oddDir, 'bundles', 'u.ab'), Buffer.alloc(2048, 9));
+
+      fs.mkdirSync(path.join(cnDir, 'bundles'), { recursive: true });
+      fs.writeFileSync(path.join(cnDir, 'manifest.json'), JSON.stringify({ version: '1.0.0' }));
+      fs.writeFileSync(path.join(cnDir, 'bundles', 'wx.ab'), Buffer.alloc(512, 3));
+
+      app.locals.assetServer.invalidateManifest();
+
+      const listed = await request(port, '/api/platforms');
+      const listedJson = JSON.parse(listed.body.toString());
+      check('非 ASCII 平台名出现在 /api/platforms 里',
+        listedJson.platforms.some((p) => p.name === oddPlatform),
+        listedJson.platforms.map((p) => p.name).join(', '));
+
+      const oddVersion = await request(port,
+        `/api/version?platform=${encodeURIComponent(oddPlatform)}&current=1.0.0`);
+      const oddJson = JSON.parse(oddVersion.body.toString());
+      check('非 ASCII 平台的版本号独立于其它平台',
+        oddJson.version === '9.9.9' && oddJson.needUpdate === true,
+        `version=${oddJson.version}`);
+
+      const oddAsset = await request(port, `/assets/${encodeURIComponent(oddPlatform)}/bundles/u.ab`);
+      check('非 ASCII 平台的资产下载返回 200',
+        oddAsset.status === 200, `状态 ${oddAsset.status}, ${oddAsset.body.length} 字节`);
+      check('非 ASCII 平台的资产内容完整',
+        oddAsset.body.length === 2048, `${oddAsset.body.length} 字节，期望 2048`);
+      check('X-Asset-Platform 头做了 percent-encode（响应头只能放 ASCII）',
+        oddAsset.headers['x-asset-platform'] === encodeURIComponent(oddPlatform),
+        `实际 ${oddAsset.headers['x-asset-platform']}`);
+
+      const cnAsset = await request(port, `/assets/${encodeURIComponent(cnPlatform)}/bundles/wx.ab`);
+      check('纯中文平台名的资产下载也正常',
+        cnAsset.status === 200 && cnAsset.body.length === 512,
+        `状态 ${cnAsset.status}, ${cnAsset.body.length} 字节`);
+    } finally {
+      // 这两个目录名里带中文/platform 名，正好是 fs.rmSync 会出问题的路径，
+      // 所以必须走 safe-rm。库里的说明写了具体现象。
+      await removeDir(oddDir);
+      await removeDir(cnDir);
+      app.locals.assetServer.invalidateManifest();
+    }
+
+    // ---------------- CORS 回显 Origin 时必须规范化 ----------------
+    //
+    // 回显原始 Origin 字符串是危险的：`http://localhost/雪` 能通过回环检查，
+    // 但把它写进响应头会抛 ERR_INVALID_CHAR，把一个正常请求打成 500。
+    // 必须回显规范化后的 origin（url.origin 只含「协议://主机[:端口]」）。
+    //
+    // 注意：这里只能测"带路径的 ASCII Origin"。非 ASCII 的 Origin 用 Node 的
+    // http 客户端**发不出去**（客户端自己就会抛 ERR_INVALID_CHAR），要覆盖它
+    // 得手写 socket 原始字节；而规范化逻辑是同一条，url.origin 对回环主机
+    // 一定是纯 ASCII，所以这里测路径被剥掉就足以证明这条路走通了。
+    section('CORS 回显规范化');
+
+    const originWithPath = await request(port, '/api/health', {
+      headers: { Origin: 'http://localhost:5500/some/path' },
+    });
+    check('带路径的本机 Origin 不会把响应打成 500',
+      originWithPath.status === 200, `状态 ${originWithPath.status}`);
+    check('回显的是规范化后的 origin（路径被剥掉）',
+      originWithPath.headers['access-control-allow-origin'] === 'http://localhost:5500',
+      `实际 ${originWithPath.headers['access-control-allow-origin']}`);
+
+    const evilOrigin = await request(port, '/api/health', {
+      headers: { Origin: 'http://evil.example' },
+    });
+    check('非本机 Origin 不回 ACAO',
+      !evilOrigin.headers['access-control-allow-origin'],
+      `实际 ${evilOrigin.headers['access-control-allow-origin']}`);
+
+    const evilWrite = await request(port, '/api/control/disable', {
+      method: 'POST',
+      headers: { Origin: 'http://evil.example' },
+    });
+    check('非本机 Origin 的状态变更请求被 403 拒绝',
+      evilWrite.status === 403, `状态 ${evilWrite.status}`);
   } finally {
-    try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try { await removeDir(probeDir); } catch { /* 忽略 */ }
     await clearFaults(port).catch(() => {});
     server.close();
   }
@@ -718,6 +816,24 @@ function testManualStructure() {
     cjk.length ? `残留 ${cjk.length} 处：${[...new Set(cjk)].slice(0, 10).join(' / ')}` : '');
 }
 
+/**
+ * 退出前先把 stdout 真正写出去。
+ *
+ * Windows 上 stdout 指向管道或文件时写入是**异步**的，而 process.exit()
+ * 不会等它排空 —— 结果是最后几行输出（往往正好是失败明细和汇总）
+ * 凭空消失，只留下一个 exit code 1。这个坑在真实排查里非常费时间：
+ * 你知道有断言失败了，却看不到是哪条。
+ */
+function exitAfterFlush(code) {
+  const finish = () => process.exit(code);
+  if (process.stdout.writableLength === 0) {
+    setImmediate(finish);
+    return;
+  }
+  process.stdout.once('drain', finish);
+  setTimeout(finish, 1000); // 兜底，避免 stdout 永远不 drain
+}
+
 // ============================================================ 主流程
 
 async function main() {
@@ -745,12 +861,12 @@ async function main() {
   }
   console.log('='.repeat(56));
 
-  process.exit(failed ? 1 : 0);
+  exitAfterFlush(failed ? 1 : 0);
 }
 
 main().catch((err) => {
   console.error('\n回归测试自身出错了：');
   console.error(err);
   try { fs.writeFileSync(CONFIG_PATH, fs.readFileSync(CONFIG_PATH, 'utf8')); } catch { /* 忽略 */ }
-  process.exit(1);
+  exitAfterFlush(1);
 });

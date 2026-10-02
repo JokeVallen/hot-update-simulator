@@ -19,6 +19,9 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+// 删目录不能用 fs.rmSync：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
+// 详见 scripts/lib/safe-rm.js
+const { removeDirSync } = require('./lib/safe-rm');
 
 const TARGET_URL = (process.argv[2] || 'http://127.0.0.1:5500').replace(/\/$/, '');
 const DEBUG_PORT = 9333;
@@ -151,7 +154,8 @@ async function main() {
 
   const cleanup = () => {
     try { child.kill(); } catch { /* 已经退出 */ }
-    try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    // 临时目录名是 ASCII，但统一走 safe-rm 免得以后改名踩坑
+    removeDirSync(userDataDir);
     restoreConfig();
   };
 

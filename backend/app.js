@@ -86,14 +86,20 @@ const serverCfg = configManager.get('server');
  * 这是个只在本机跑的开发工具，唯一合法的跨源来源就是本机的另一个端口
  * （开发模式下前端在 5173，通过代理或直连访问后端）。所以只要 hostname
  * 是回环地址就放行，其余一律按跨站处理。
+ *
+ * @returns {string|null} 规范化后的 origin（可直接写进响应头）；不合法返回 null
  */
-function isLoopbackOrigin(origin) {
-  if (!origin) return false;
+function normalizeLoopbackOrigin(origin) {
+  if (!origin) return null;
   try {
-    const { hostname } = new URL(origin);
-    return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname);
+    const url = new URL(origin);
+    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)) return null;
+    // 返回 url.origin 而不是原始字符串：原始值可能带路径或非 ASCII
+    // （`http://localhost/雪` 能通过 hostname 检查），直接写进响应头会抛
+    // ERR_INVALID_CHAR。url.origin 已被规范化成「协议://主机[:端口]」，只含 ASCII。
+    return url.origin;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -111,13 +117,14 @@ function isLoopbackOrigin(origin) {
  *     （简单请求也能挡住，不依赖 CORS 预检）
  */
 app.use((req, res, next) => {
-  const origin = req.get('origin');
+  const rawOrigin = req.get('origin');
+  const allowedOrigin = normalizeLoopbackOrigin(rawOrigin);
 
-  if (origin && !isLoopbackOrigin(origin)) {
+  if (rawOrigin && !allowedOrigin) {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       return res.status(403).json({
         error: '拒绝跨站的状态变更请求：这个工具只允许本机来源操作',
-        origin,
+        origin: rawOrigin,
       });
     }
     // 读请求放行，但不回 ACAO —— 浏览器拿不到响应内容
@@ -125,8 +132,8 @@ app.use((req, res, next) => {
     return next();
   }
 
-  if (origin) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS');

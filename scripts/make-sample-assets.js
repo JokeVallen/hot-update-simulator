@@ -15,6 +15,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+// 删目录不能用 fs.rmSync：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
+// 详见 scripts/lib/safe-rm.js
+const { removeDirSync } = require('./lib/safe-rm');
 
 const STORAGE_ROOT = path.resolve(__dirname, '..', 'storage');
 const ASSETS_ROOT = path.join(STORAGE_ROOT, 'assets');
@@ -84,7 +87,9 @@ function makeBundle(filePath, bytes, seed, label) {
 
 function main() {
   if (args.clean && fs.existsSync(ASSETS_ROOT)) {
-    fs.rmSync(ASSETS_ROOT, { recursive: true, force: true });
+    // 不用 fs.rmSync：资产目录里可能有一级子目录是中文平台名，
+    // 而它在 Windows 上会静默失败甚至让进程硬崩。见 scripts/lib/safe-rm.js
+    removeDirSync(ASSETS_ROOT);
     console.log(`已清空 ${ASSETS_ROOT}`);
   }
 
