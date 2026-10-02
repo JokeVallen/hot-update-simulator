@@ -117,9 +117,57 @@ function inGrayGroup(deviceId, percent) {
  * 版本判断的唯一实现。/api/version、/api/check、/api/manifest 都走这里，
  * 保证三条路径对同一份数据给出一致的结论。
  */
+/**
+ * 代码热更轨道的版本判断。
+ *
+ * 和资源轨道比，它多了**兼容性门禁**。这是 HybridCLR 时代最容易出的事故：
+ * 热更 DLL 引用了主包没做 AOT 泛型生成的类型，编译期毫无征兆、运行期才炸，
+ * 而且报错信息离根因很远。所以真实管线会声明"这份代码更新要求主包 >= X"。
+ *
+ * ⚠️ `compatible` / `aotMatch` 在**没拿到判断依据**时返回 null，而不是 true。
+ * "没检查"和"检查通过"是两件不同的事 —— 客户端必须能区分，
+ * 否则一个没传 appVersion 的旧客户端会被误告知"兼容"。
+ */
+function buildCodeDecision({ code, query, appVersion }) {
+  if (!code) return null;
+
+  const codeCurrent = query.codeCurrent ? String(query.codeCurrent) : null;
+  const needUpdate = !codeCurrent || compareVersions(codeCurrent, code.version) !== 0;
+
+  const compatible = (code.minAppVersion && appVersion)
+    ? compareVersions(appVersion, code.minAppVersion) >= 0
+    : null;
+
+  const clientAotHash = query.aotHash ? String(query.aotHash) : null;
+  const aotMatch = (code.aotHash && clientAotHash)
+    ? code.aotHash === clientAotHash
+    : null;
+
+  return {
+    version: code.version,
+    currentVersion: codeCurrent,
+    needUpdate,
+    forceUpdate: Boolean(code.forceUpdate),
+    minAppVersion: code.minAppVersion,
+    appVersion: appVersion || null,
+    compatible,
+    // 为 true 表示这份代码更新光靠热更换不上去，必须先升级主包。
+    // 单列一个字段是为了让客户端不必自己去推导"compatible === false 意味着什么"。
+    requiresAppUpdate: compatible === false,
+    aotHash: code.aotHash,
+    aotMatch,
+    notice: code.notice,
+    dir: code.dir,
+    fileCount: code.fileCount,
+    totalSize: code.totalSize,
+    manifestUrl: `/api/manifest?platform=${encodeURIComponent(code.platform)}&track=code`,
+  };
+}
+
 function buildVersionDecision({ manifest, query, hotUpdate }) {
   const currentVersion = query.current ? String(query.current) : null;
   const channel = String(query.channel || manifest.channel || hotUpdate.defaultChannel || 'default');
+  const appVersion = query.appVersion ? String(query.appVersion) : null;
 
   // 语义比较，不是字符串严格相等：客户端报 "1.0" 而清单是 "1.0.0"
   // 时不应判定为需要更新（原实现会让客户端每次启动都被要求热更）。
@@ -156,8 +204,18 @@ function buildVersionDecision({ manifest, query, hotUpdate }) {
     totalSize: manifest.totalSize,
     manifestUrl: `/api/manifest?platform=${encodeURIComponent(manifest.platform)}&channel=${encodeURIComponent(channel)}`,
     generatedAt: manifest.generatedAt,
+    // 代码热更轨道；平台没配 code 块时为 null（客户端据此知道这个平台没有代码热更）
+    code: buildCodeDecision({ code: manifest.code, query, appVersion }),
     ...(grayBlocked ? { grayBlocked: true, grayPercent: hotUpdate.gray.percent } : {}),
   };
+}
+
+/** 资源清单里只带代码轨道的摘要，不重复整份文件列表。要下代码就 ?track=code。 */
+function withCodeSummary(manifest) {
+  if (!manifest.code) return manifest;
+  const code = { ...manifest.code };
+  delete code.files;
+  return { ...manifest, code };
 }
 
 module.exports = function createApiRouter({ configManager, assetServer }) {
@@ -209,6 +267,9 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
           version: manifest ? manifest.version : null,
           fileCount: manifest ? manifest.fileCount : 0,
           totalSize: manifest ? manifest.totalSize : 0,
+          // 代码热更轨道的版本是独立的，分开列出来
+          codeVersion: manifest && manifest.code ? manifest.code.version : null,
+          codeFileCount: manifest && manifest.code ? manifest.code.fileCount : 0,
         };
       }));
       res.json({ assetRoot: assetServer.root(), platforms });
@@ -226,8 +287,11 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
    *     parameters:
    *       - { in: query, name: platform, required: true, schema: { type: string }, description: 平台，如 Android }
    *       - { in: query, name: channel, schema: { type: string }, description: 渠道，默认取配置里的 defaultChannel }
-   *       - { in: query, name: current, schema: { type: string }, description: 客户端当前版本 }
+   *       - { in: query, name: current, schema: { type: string }, description: 客户端当前的资源版本 }
    *       - { in: query, name: deviceId, schema: { type: string }, description: 设备唯一标识，用于灰度分组 }
+   *       - { in: query, name: codeCurrent, schema: { type: string }, description: 客户端当前的代码版本（独立于资源版本） }
+   *       - { in: query, name: appVersion, schema: { type: string }, description: 已安装主包的版本，用于判断代码更新是否兼容（AOT 元数据门禁） }
+   *       - { in: query, name: aotHash, schema: { type: string }, description: 客户端算出的 AOT 元数据指纹，与服务器声明的不一致说明不兼容 }
    *     responses:
    *       200: { description: 版本信息 }
    *       400: { description: 缺少 platform }
@@ -257,10 +321,11 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
    *     summary: 获取文件清单
    *     parameters:
    *       - { in: query, name: platform, required: true, schema: { type: string } }
+   *       - { in: query, name: track, schema: { type: string, enum: [resource, code] }, description: 取哪条轨道，默认 resource。code 需要平台在 manifest.json 里配了 code 块 }
    *     responses:
    *       200: { description: 清单 }
    *       400: { description: 缺少 platform }
-   *       404: { description: 平台不存在 }
+   *       404: { description: 平台不存在，或该平台没有代码热更轨道 }
    */
   router.get('/manifest', async (req, res, next) => {
     const platform = requirePlatform(req, res);
@@ -271,7 +336,25 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
       if (!manifest) {
         return res.status(404).json({ error: `平台不存在或没有资源目录：${platform}` });
       }
-      return res.json(manifest);
+
+      const track = String(req.query.track || 'resource').toLowerCase();
+      if (track === 'code') {
+        if (!manifest.code) {
+          return res.status(404).json({
+            error: `平台 ${platform} 没有代码热更轨道：manifest.json 里缺少 code 块，或代码目录不存在`,
+          });
+        }
+        const { files, ...code } = manifest.code;
+        return res.json({
+          ...code,
+          track: 'code',
+          generatedAt: manifest.generatedAt,
+          files,
+        });
+      }
+
+      // 资源轨道：只带代码轨道的摘要，不重复整份文件列表
+      return res.json({ ...withCodeSummary(manifest), track: 'resource' });
     } catch (err) {
       return next(err);
     }
@@ -306,8 +389,10 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
       return res.json({
         ...decision,
         // 不需要更新时就不必把整份清单发下去，省流量——真实服务端也会这么做
-        manifest: decision.needUpdate ? manifest : undefined,
+        manifest: decision.needUpdate ? withCodeSummary(manifest) : undefined,
         files: decision.needUpdate ? manifest.files : [],
+        // 代码轨道要更的话也一并给出，保持"一次往返"的初衷
+        codeManifest: decision.code && decision.code.needUpdate ? manifest.code : undefined,
       });
     } catch (err) {
       return next(err);

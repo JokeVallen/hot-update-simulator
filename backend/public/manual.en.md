@@ -105,6 +105,8 @@ backend/
   public/manual.en.md     This file (English manual)
 storage/                  Runtime data (gitignored)
   assets/{platform}/...   Hot-update bundles go here
+    dll/                  Code hot update (optional, see "Code Hot Updates")
+    bundles/              Resource hot update
   presets.json            Custom presets
   favorites.json          Saved requests
 frontend/                 Vite + Bootstrap panel (vanilla JS, no framework)
@@ -148,6 +150,121 @@ storage/assets/
   // in which case the directory is not scanned
 }
 ```
+
+---
+
+## Code Hot Updates
+
+A hot update is really **two independent tracks**. Mature pipelines (YooAsset,
+Addressables, the HybridCLR DLL set) version and deliver them separately:
+
+| | Resource track | Code track |
+|---|---|---|
+| Ships | AssetBundles, textures, config | Assemblies `.dll` (HybridCLR / ILRuntime), `.lua`, `.js` |
+| Version field | `version` | `code.version` |
+| How often it changes | Every content change | Maybe once a week |
+| What if it fails | Can degrade; a missing texture is survivable | Usually must succeed, or the game may not start |
+| Compatibility | Mostly just format | **Must match the base package's AOT metadata** |
+
+The simulator supports both, with **separate version numbers**. Add a `code` block to
+`manifest.json`:
+
+```jsonc
+// storage/assets/Android/manifest.json
+{
+  "version": "1.5.0",            // resource version
+  "code": {
+    "version": "2.1.0",          // code version, independent of the one above
+    "minAppVersion": "1.2.0",    // below this base package version, code cannot be hot-updated
+    "aotHash": "aot-abc123",     // the expected AOT metadata fingerprint
+    "forceUpdate": false,
+    "notice": "Fixed a skill damage miscalculation",
+    "dir": "dll"                 // directory holding the code files; "dll" by default
+  }
+}
+```
+
+Lay the files out like this:
+
+```
+storage/assets/Android/
+  manifest.json
+  dll/
+    Assembly-CSharp.dll.bytes    ← code track
+    GameLogic.dll.bytes
+  bundles/
+    role.ab                      ← resource track
+```
+
+**Files under `dll/` never appear in the resource manifest.** The two tracks have separate
+manifests; the client fetches the code manifest with `?track=code`. Mixing them would download
+the same DLL twice, and the client could not tell "resource update" from "code update" — and
+those two need completely different failure handling.
+
+### About AOT compatibility
+
+This is the most common and hardest-to-diagnose failure in the HybridCLR era: a hot-update DLL
+references a type the base package **never generated AOT generic code for**. Nothing is wrong at
+compile time; it blows up at runtime, and the error message sits far from the root cause.
+
+So real pipelines declare "this code update requires base package >= X". The client submits the
+installed base package version and its AOT fingerprint, and the server says whether it can be used:
+
+```bash
+curl "http://localhost:5500/api/version?platform=Android&current=1.5.0&codeCurrent=2.1.0&appVersion=1.0.0&aotHash=aot-abc123"
+```
+
+```jsonc
+{
+  "version": "1.5.0",
+  "needUpdate": false,
+  "code": {
+    "version": "2.1.0",
+    "needUpdate": true,
+    "minAppVersion": "1.2.0",
+    "compatible": false,        // base package 1.0.0 < 1.2.0
+    "requiresAppUpdate": true,  // cannot be fixed by hot update alone; the app must be upgraded
+    "aotHash": "aot-abc123",
+    "aotMatch": true,
+    "fileCount": 2,
+    "manifestUrl": "/api/manifest?platform=Android&track=code"
+  }
+}
+```
+
+⚠️ `compatible` and `aotMatch` are `null` when there is **nothing to judge against** — **not `true`**.
+"Not checked" and "checked and passed" are different things, and the client has to be able to tell
+them apart. Otherwise an old client that never sends `appVersion` is told "compatible" and updates
+into code that crashes.
+
+These two fields exist precisely to test the client's gating logic: raise `minAppVersion`, or change
+`aotHash`, and see whether the client actually blocks the update instead of blindly applying it.
+
+### Injecting faults on the code download only
+
+`pathGlob` scopes a fault to the code track:
+
+```jsonc
+{ "match": { "pathGlob": "/assets/**/dll/**" },
+  "action": { "type": "abort", "ratio": 0.5 } }
+```
+
+That reproduces "resources all downloaded, then the code bundle died halfway". **Incomplete code can
+stop the game from starting at all, while incomplete resources may only cost you a texture** — the two
+need completely different handling, and each deserves its own test.
+
+### What is not modelled here
+
+To be clear, this is **protocol-level** support, not a complete code hot-update framework:
+
+- **No differential patches**: whole files only. File-by-file incremental updates suit Lua projects
+  fine; diffing a monolithic DLL is out of scope.
+- **No inter-file dependency ordering**: the manifest is a flat list — no "download A before B".
+- **No code-specific validation**: Lua bytecode versions, DLL architecture mismatches, and the like
+  are not understood by the server.
+- **`channel` is still decorative**: you cannot give the beta channel a different DLL. The workaround
+  is to treat it as two platforms (`Android-beta` / `Android-prod`) — platform names are arbitrary
+  directory names anyway.
 
 ---
 
@@ -401,10 +518,10 @@ public class HotUpdateClient : MonoBehaviour
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/version` | Check the version and decide whether an update is needed. Parameters `platform`, `current`, `channel`, `deviceId` |
-| GET | `/api/manifest` | Fetch the full file manifest (path / size / md5 / download URL) |
+| GET | `/api/version` | Check the version and decide whether an update is needed. Parameters `platform`, `current`, `channel`, `deviceId`; for code hot updates also `codeCurrent`, `appVersion`, `aotHash` |
+| GET | `/api/manifest` | Fetch the full file manifest (path / size / md5 / download URL). `?track=code` fetches the code track |
 | GET | `/api/check` | Both of the above in one call, saving a round trip |
-| GET | `/api/platforms` | List every platform and its version |
+| GET | `/api/platforms` | List every platform with its resource version and code version |
 | GET | `/api/health` | Health check |
 | POST | `/api/manifest/refresh` | Clear the manifest cache so newly added bundles take effect immediately |
 | GET | `/assets/{platform}/{path}` | Download an asset; supports Range resume and ETag conditional requests |

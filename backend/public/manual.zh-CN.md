@@ -105,6 +105,8 @@ backend/
   public/manual.zh-CN.md  本文件（中文手册）
 storage/                  运行时数据（已 gitignore）
   assets/{平台}/...       热更包放这里
+    dll/                  代码热更（可选，见「代码热更怎么放」）
+    bundles/              资源热更
   presets.json            自定义预置方案
   favorites.json          收藏的请求
 frontend/                 Vite + Bootstrap 面板（原生 JS，无框架）
@@ -148,6 +150,114 @@ storage/assets/
   // 此时不再扫描目录
 }
 ```
+
+---
+
+## 代码热更怎么放
+
+热更其实是**两条独立的轨道**。成熟管线（YooAsset、Addressables、HybridCLR 的
+DLL 集）都是分开版本、分开下发的：
+
+| | 资源轨道 | 代码轨道 |
+|---|---|---|
+| 装什么 | AssetBundle、贴图、配置 | 程序集 `.dll`（HybridCLR / ILRuntime）、`.lua`、`.js` |
+| 版本字段 | `version` | `code.version` |
+| 多久变一次 | 每次改内容都变 | 可能一周才动一次 |
+| 失败了怎么办 | 可以降级、可以少个贴图 | 往往必须成功，否则可能进不去游戏 |
+| 兼容性 | 基本只要格式对 | **必须和主包的 AOT 元数据匹配** |
+
+模拟器两条轨道都支持，而且**版本号是分开的**。在 `manifest.json` 里加一个 `code` 块：
+
+```jsonc
+// storage/assets/Android/manifest.json
+{
+  "version": "1.5.0",            // 资源版本
+  "code": {
+    "version": "2.1.0",          // 代码版本，独立于上面那个
+    "minAppVersion": "1.2.0",    // 主包低于这个版本就不能热更代码
+    "aotHash": "aot-abc123",     // 期望的 AOT 元数据指纹
+    "forceUpdate": false,
+    "notice": "修复了技能伤害计算错误",
+    "dir": "dll"                 // 代码文件所在目录，默认就是 dll
+  }
+}
+```
+
+目录这样放：
+
+```
+storage/assets/Android/
+  manifest.json
+  dll/
+    Assembly-CSharp.dll.bytes    ← 代码轨道
+    GameLogic.dll.bytes
+  bundles/
+    role.ab                      ← 资源轨道
+```
+
+**`dll/` 下的文件不会出现在资源清单里**。两条轨道的清单是分开的，客户端用
+`?track=code` 单独取代码清单。混在一起的话同一份 dll 会被下两次，而且客户端
+没法区分"资源更新"和"代码更新"——而这两者的失败处理策略完全不同。
+
+### 关于 AOT 兼容性
+
+这是 HybridCLR 时代最容易出、也最难查的事故：热更 DLL 引用了主包**没有做 AOT
+泛型生成**的类型。编译期毫无征兆，运行期才炸，而且报错信息离根因很远。
+
+所以真实管线都会声明"这份代码更新要求主包 >= X"。客户端把已装主包的版本和
+AOT 指纹一起提交，服务器告诉它能不能用：
+
+```bash
+curl "http://localhost:5500/api/version?platform=Android&current=1.5.0&codeCurrent=2.1.0&appVersion=1.0.0&aotHash=aot-abc123"
+```
+
+```jsonc
+{
+  "version": "1.5.0",
+  "needUpdate": false,
+  "code": {
+    "version": "2.1.0",
+    "needUpdate": true,
+    "minAppVersion": "1.2.0",
+    "compatible": false,        // 主包 1.0.0 < 1.2.0
+    "requiresAppUpdate": true,  // 光靠热更换不上去，必须先升级主包
+    "aotHash": "aot-abc123",
+    "aotMatch": true,
+    "fileCount": 2,
+    "manifestUrl": "/api/manifest?platform=Android&track=code"
+  }
+}
+```
+
+⚠️ `compatible` 和 `aotMatch` 在**没提供判断依据**时是 `null`，**不是 `true`**。
+"没检查"和"检查通过"是两件不同的事——客户端必须能区分，否则一个没传
+`appVersion` 的旧客户端会被误告知"兼容"，然后更到一份会崩的代码。
+
+这两个字段就是用来测客户端门禁逻辑的：把 `minAppVersion` 调高、或者改掉
+`aotHash`，看客户端会不会真的挡住，而不是闭着眼睛更下去。
+
+### 只对代码下载注入故障
+
+用 `pathGlob` 就能把故障限定在代码轨道上：
+
+```jsonc
+{ "match": { "pathGlob": "/assets/**/dll/**" },
+  "action": { "type": "abort", "ratio": 0.5 } }
+```
+
+这样能测"资源全下完了，代码包下到一半断了"。**代码不全可能让游戏直接进不去，
+资源不全可能只是少个贴图**——两者的处理方式完全不同，值得单独测。
+
+### 这一块没有建模的部分
+
+说白了这是**协议层**的支持，不是一个完整的代码热更框架：
+
+- **不发差量包**：只发整文件。Lua 项目按文件增量更新没问题，
+  整包 DLL 的差量下发做不了。
+- **没有文件依赖顺序**：清单是平铺的，没有"必须先下 A 再下 B"。
+- **没有代码专属校验**：Lua 字节码版本、DLL 架构不匹配之类，服务器不认。
+- **`channel` 仍是装饰性的**：做不到"beta 渠道拿另一份 DLL"。
+  绕法是当成两个平台（`Android-beta` / `Android-prod`）——平台名本来就是任意目录名。
 
 ---
 
@@ -398,10 +508,10 @@ public class HotUpdateClient : MonoBehaviour
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/version` | 查版本、判断是否要更新。参数 `platform`、`current`、`channel`、`deviceId` |
-| GET | `/api/manifest` | 拿完整文件清单（路径/大小/md5/下载地址） |
+| GET | `/api/version` | 查版本、判断是否要更新。参数 `platform`、`current`、`channel`、`deviceId`，代码热更再加 `codeCurrent`、`appVersion`、`aotHash` |
+| GET | `/api/manifest` | 拿完整文件清单（路径/大小/md5/下载地址）。`?track=code` 取代码轨道 |
 | GET | `/api/check` | 一步拿到上面两个结果，省一次往返 |
-| GET | `/api/platforms` | 列出所有平台及其版本 |
+| GET | `/api/platforms` | 列出所有平台及其资源版本与代码版本 |
 | GET | `/api/health` | 健康检查 |
 | POST | `/api/manifest/refresh` | 清清单缓存，让新传的包立刻生效 |
 | GET | `/assets/{平台}/{路径}` | 下载资产，支持 Range 续传和 ETag 协商缓存 |

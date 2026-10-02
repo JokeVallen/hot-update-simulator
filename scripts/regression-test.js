@@ -760,6 +760,172 @@ async function testAssetEdgeCases() {
       app.locals.assetServer.invalidateManifest();
     }
 
+    // ---------------- 代码热更轨道 ----------------
+    //
+    // 资源热更和代码热更在成熟管线里是两条**独立版本**的轨道
+    // （YooAsset 的 Package Version vs App Version、Addressables、HybridCLR 的
+    // DLL 集版本）。这里验证三件最容易做错的事：
+    //   1. 代码版本真的独立于资源版本（不是同一个号）
+    //   2. 兼容性门禁真的能挡住 —— AOT 元数据不匹配是 HybridCLR 的头号事故，
+    //      编译期没征兆、运行期才炸，而且报错离根因很远
+    //   3. 两条轨道的文件清单不重叠 —— 否则同一份 dll 会被下两次
+    section('代码热更轨道');
+
+    const codePlatform = 'CodeTrackProbe';
+    const codePlatformDir = path.join(ASSETS_ROOT, codePlatform);
+    try {
+      fs.mkdirSync(path.join(codePlatformDir, 'dll'), { recursive: true });
+      fs.mkdirSync(path.join(codePlatformDir, 'bundles'), { recursive: true });
+      fs.writeFileSync(path.join(codePlatformDir, 'manifest.json'), JSON.stringify({
+        version: '1.5.0',
+        code: {
+          version: '2.1.0',
+          minAppVersion: '1.2.0',
+          aotHash: 'aot-abc123',
+          notice: '代码更新',
+        },
+      }));
+      fs.writeFileSync(path.join(codePlatformDir, 'dll', 'Assembly-CSharp.dll.bytes'), Buffer.alloc(1024, 1));
+      fs.writeFileSync(path.join(codePlatformDir, 'dll', 'GameLogic.dll.bytes'), Buffer.alloc(512, 2));
+      fs.writeFileSync(path.join(codePlatformDir, 'bundles', 'role.ab'), Buffer.alloc(2048, 3));
+      app.locals.assetServer.invalidateManifest();
+
+      const cv = async (qs = '') => JSON.parse(
+        (await request(port, `/api/version?platform=${codePlatform}${qs}`)).body.toString(),
+      );
+
+      const base = await cv('&current=1.5.0&codeCurrent=2.1.0');
+      check('代码版本独立于资源版本（两个号可以不一样）',
+        base.version === '1.5.0' && base.code && base.code.version === '2.1.0',
+        `资源 ${base.version} / 代码 ${base.code && base.code.version}`);
+
+      const resManifest = JSON.parse(
+        (await request(port, `/api/manifest?platform=${codePlatform}`)).body.toString(),
+      );
+      const codeManifest = JSON.parse(
+        (await request(port, `/api/manifest?platform=${codePlatform}&track=code`)).body.toString(),
+      );
+
+      check('资源清单里不含代码文件（否则同一份 dll 会被下两次）',
+        resManifest.fileCount === 1 && resManifest.files.every((f) => !f.path.startsWith('dll/')),
+        `资源清单 ${resManifest.fileCount} 个文件：${resManifest.files.map((f) => f.path).join(', ')}`);
+      check('代码清单只含代码文件，且路径带 dll/ 前缀（URL 才对得上）',
+        codeManifest.fileCount === 2
+          && codeManifest.files.every((f) => f.path.startsWith('dll/'))
+          && codeManifest.files.every((f) => f.url.includes('/dll/')),
+        `代码清单 ${codeManifest.fileCount} 个：${codeManifest.files.map((f) => f.path).join(', ')}`);
+      check('代码清单带 md5（客户端要能校验）',
+        codeManifest.files.every((f) => typeof f.hash === 'string' && f.hash.length === 32),
+        codeManifest.files.map((f) => `${f.path}:${f.hash}`).join(' '));
+      check('资源清单里带的是代码轨道的摘要，不含文件列表',
+        resManifest.code && resManifest.code.version === '2.1.0' && resManifest.code.files === undefined,
+        JSON.stringify(resManifest.code && Object.keys(resManifest.code)));
+
+      const dllDl = await request(port, `/assets/${codePlatform}/dll/Assembly-CSharp.dll.bytes`);
+      check('dll 能正常下载，字节数正确',
+        dllDl.status === 200 && dllDl.body.length === 1024,
+        `状态 ${dllDl.status}, ${dllDl.body.length} 字节`);
+
+      // ---- 兼容性门禁 ----
+      const tooOld = await cv('&current=1.5.0&codeCurrent=2.1.0&appVersion=1.0.0');
+      check('主包版本过低时判定为不兼容',
+        tooOld.code.compatible === false,
+        `compatible=${tooOld.code.compatible}`);
+      check('不兼容时明确给出 requiresAppUpdate（客户端不用自己推导）',
+        tooOld.code.requiresAppUpdate === true,
+        `requiresAppUpdate=${tooOld.code.requiresAppUpdate}`);
+
+      const okApp = await cv('&current=1.5.0&codeCurrent=2.1.0&appVersion=1.2.0');
+      check('主包版本达标时判定为兼容（边界值算达标）',
+        okApp.code.compatible === true, `compatible=${okApp.code.compatible}`);
+
+      // ⚠️ 这条最重要：没传 appVersion 时必须返回 null（"没检查"），
+      // 而不是乐观地返回 true —— 否则一个旧客户端会被误告知"兼容"。
+      const noApp = await cv('&current=1.5.0&codeCurrent=2.1.0');
+      check('没传 appVersion 时返回 null（"没检查"≠"检查通过"）',
+        noApp.code.compatible === null, `compatible=${JSON.stringify(noApp.code.compatible)}`);
+      check('没传 aotHash 时同样返回 null',
+        noApp.code.aotMatch === null, `aotMatch=${JSON.stringify(noApp.code.aotMatch)}`);
+
+      const aotOk = await cv('&current=1.5.0&codeCurrent=2.1.0&aotHash=aot-abc123');
+      check('AOT 指纹一致时 aotMatch 为 true',
+        aotOk.code.aotMatch === true, `aotMatch=${aotOk.code.aotMatch}`);
+
+      const aotBad = await cv('&current=1.5.0&codeCurrent=2.1.0&aotHash=aot-WRONG');
+      check('AOT 指纹不一致时 aotMatch 为 false（这就是运行期崩溃的前兆）',
+        aotBad.code.aotMatch === false, `aotMatch=${aotBad.code.aotMatch}`);
+
+      const codeStale = await cv('&current=1.5.0&codeCurrent=1.0.0');
+      check('代码版本落后时 needUpdate 为 true',
+        codeStale.code.needUpdate === true, `needUpdate=${codeStale.code.needUpdate}`);
+      const codeFresh = await cv('&current=1.5.0&codeCurrent=2.1.0');
+      check('代码版本已是最新时 needUpdate 为 false',
+        codeFresh.code.needUpdate === false, `needUpdate=${codeFresh.code.needUpdate}`);
+
+      // ---- 没有代码轨道的平台 ----
+      //
+      // 这里必须**自己建一个平台**，不能拿示例里的 Android 当例子：
+      // npm run sample 现在会生成 dll/ 和 code 块，于是 Android 也是有代码轨道的。
+      // 断言依赖示例数据的话，示例一变测试就红 —— 而且红得让人以为是功能坏了。
+      const plainPlatform = 'NoCodeTrackProbe';
+      const plainDir = path.join(ASSETS_ROOT, plainPlatform);
+      fs.mkdirSync(path.join(plainDir, 'bundles'), { recursive: true });
+      fs.writeFileSync(path.join(plainDir, 'manifest.json'), JSON.stringify({ version: '1.0.0' }));
+      fs.writeFileSync(path.join(plainDir, 'bundles', 'a.ab'), Buffer.alloc(256, 5));
+      app.locals.assetServer.invalidateManifest();
+
+      try {
+        const plainVersion = JSON.parse(
+          (await request(port, `/api/version?platform=${plainPlatform}&current=1.0.0`)).body.toString(),
+        );
+        check('平台没配 code 块时 /api/version 的 code 为 null',
+          plainVersion.code === null, `code=${JSON.stringify(plainVersion.code)}`);
+
+        const plainManifest = JSON.parse(
+          (await request(port, `/api/manifest?platform=${plainPlatform}`)).body.toString(),
+        );
+        check('没配 code 块时资源清单里也没有 code 字段',
+          plainManifest.code === undefined, `code=${JSON.stringify(plainManifest.code)}`);
+
+        const noTrack = await request(port, `/api/manifest?platform=${plainPlatform}&track=code`);
+        check('没配代码轨道时 ?track=code 返回 404（而不是空清单）',
+          noTrack.status === 404, `状态 ${noTrack.status}`);
+
+        const emptyDirPlatform = 'EmptyCodeDirProbe';
+        const emptyDir = path.join(ASSETS_ROOT, emptyDirPlatform);
+        fs.mkdirSync(path.join(emptyDir, 'bundles'), { recursive: true });
+        fs.writeFileSync(path.join(emptyDir, 'manifest.json'), JSON.stringify({
+          version: '1.0.0',
+          code: { version: '9.9.9' },   // 声明了代码轨道，但 dll/ 目录不存在
+        }));
+        app.locals.assetServer.invalidateManifest();
+        try {
+          const codeDirMissing = JSON.parse(
+            (await request(port, `/api/manifest?platform=${emptyDirPlatform}`)).body.toString(),
+          );
+          check('声明了 code 但代码目录不存在时，当作没有代码轨道（不报错）',
+            codeDirMissing.code === undefined,
+            `code=${JSON.stringify(codeDirMissing.code)}`);
+        } finally {
+          await removeDir(emptyDir);
+          app.locals.assetServer.invalidateManifest();
+        }
+      } finally {
+        await removeDir(plainDir);
+        app.locals.assetServer.invalidateManifest();
+      }
+
+      // ---- 平台列表里能看到代码版本 ----
+      const platformList = JSON.parse((await request(port, '/api/platforms')).body.toString());
+      const entry = platformList.platforms.find((p) => p.name === codePlatform);
+      check('/api/platforms 里能分别看到资源版本与代码版本',
+        entry && entry.version === '1.5.0' && entry.codeVersion === '2.1.0',
+        entry ? `资源 ${entry.version} / 代码 ${entry.codeVersion}` : '没找到该平台');
+    } finally {
+      await removeDir(codePlatformDir);
+      app.locals.assetServer.invalidateManifest();
+    }
+
     // ---------------- CORS 回显 Origin 时必须规范化 ----------------
     //
     // 回显原始 Origin 字符串是危险的：`http://localhost/雪` 能通过回环检查，

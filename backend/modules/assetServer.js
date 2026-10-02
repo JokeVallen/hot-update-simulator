@@ -39,6 +39,15 @@ const MIME_TYPES = {
   '.assets': 'application/octet-stream',
   '.bytes': 'application/octet-stream',
   '.bin': 'application/octet-stream',
+  // 代码热更：HybridCLR / ILRuntime 的程序集，Lua 与 JS 脚本。
+  // 这几个后缀没列进表里也能正常下载（会回退成二进制流），
+  // 列出来只是让 Content-Type 准确，方便用浏览器和抓包工具排查。
+  '.dll': 'application/octet-stream',
+  '.pdb': 'application/octet-stream',
+  '.lua': 'text/plain; charset=utf-8',
+  '.luac': 'application/octet-stream',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
 };
 
 /** manifest 扫描结果的缓存时长，避免每次请求都把整个目录的 md5 重算一遍。 */
@@ -424,6 +433,9 @@ class AssetServer {
       }
     }
 
+    // 代码热更轨道（可选）。要先于资源清单算出来：它的文件必须从资源清单里排除。
+    const code = await this._buildCodeTrack(platform, platformDir, meta.code);
+
     let files;
     if (Array.isArray(meta.files) && meta.files.length) {
       files = meta.files.map((f) => ({
@@ -440,6 +452,12 @@ class AssetServer {
       }));
       // manifest.json 自己不该出现在下载清单里
       files = files.filter((f) => f.path !== 'manifest.json');
+      // 代码轨道下的文件也不该出现在资源清单里：否则同一份 dll 会被下两次，
+      // 而客户端无法区分"资源更新"和"代码更新"——这两个的失败处理策略完全不同。
+      if (code) {
+        const codePaths = new Set(code.files.map((f) => f.path));
+        files = files.filter((f) => !codePaths.has(f.path));
+      }
     }
 
     const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
@@ -456,8 +474,80 @@ class AssetServer {
       generatedAt: new Date().toISOString(),
       files,
     };
+    if (code) manifest.code = code;
     if (meta._warning) manifest.warning = meta._warning;
     return manifest;
+  }
+
+  /**
+   * 构建「代码热更」轨道。
+   *
+   * 为什么值得单独一条轨道，而不是让使用者把 dll 混在资源里：
+   *
+   *   1. **版本要分开**。成熟管线（YooAsset 的 Package Version vs App Version、
+   *      Addressables、HybridCLR 的 DLL 集）里，代码版本和资源版本是两条独立的
+   *      线：资源可以每天发好几个版本，代码可能一周才动一次。混在一个版本号里，
+   *      客户端就没法只更其中一边。
+   *
+   *   2. **兼容性门禁**。这是 HybridCLR 时代最容易出的事故：热更 DLL 引用了
+   *      主包没做 AOT 泛型生成的类型，**编译期毫无征兆，运行期才炸**，
+   *      而且报错信息跟根因隔得很远。所以真实管线会声明
+   *      "这份代码更新要求主包 >= X"，客户端据此决定要不要更。
+   *      这里用 minAppVersion + aotHash 两个字段把这个门禁表达出来。
+   *
+   * 文件来源：优先用 code.files 完全自定义；否则扫描 code.dir（默认 "dll"）。
+   * 目录不存在就认为没有代码轨道，返回 null，一切照旧。
+   *
+   * @param {string} platform
+   * @param {string} platformDir
+   * @param {object|undefined} raw manifest.json 里的 code 块
+   */
+  async _buildCodeTrack(platform, platformDir, raw) {
+    if (!raw || typeof raw !== 'object') return null;
+
+    const dir = String(raw.dir || 'dll')
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '') || 'dll';
+
+    let files;
+    if (Array.isArray(raw.files) && raw.files.length) {
+      files = raw.files.map((f) => {
+        const p = String(f.path || '').replace(/\\/g, '/');
+        return {
+          path: p,
+          size: Number(f.size) || 0,
+          hash: f.hash || f.md5 || null,
+          url: f.url || `/assets/${encodeURIComponent(platform)}/${p.split('/').map(encodeURIComponent).join('/')}`,
+        };
+      });
+    } else {
+      const codeDir = this.safeResolve(platformDir, dir);
+      if (!codeDir || !fs.existsSync(codeDir)) return null;
+      // 第二个参数是 base：让 path 带上 "dll/" 前缀，URL 才对得上
+      files = await AssetServer.scanDirectory(codeDir, platformDir);
+      files = files.map((f) => ({
+        ...f,
+        url: `/assets/${encodeURIComponent(platform)}/${f.path.split('/').map(encodeURIComponent).join('/')}`,
+      }));
+    }
+
+    if (!files.length) return null;
+
+    return {
+      platform,
+      dir,
+      // 没写版本就按内容推导，和资源轨道同一套逻辑
+      version: raw.version || AssetServer.deriveVersion(files),
+      // 主包版本低于它就不能热更代码（AOT 元数据对不上）
+      minAppVersion: raw.minAppVersion || null,
+      // 期望的 AOT 元数据指纹；客户端把它算出来一起提交，对不上就说明不兼容
+      aotHash: raw.aotHash || null,
+      forceUpdate: Boolean(raw.forceUpdate),
+      notice: raw.notice || '',
+      fileCount: files.length,
+      totalSize: files.reduce((sum, f) => sum + (f.size || 0), 0),
+      files,
+    };
   }
 
   /** 清掉 manifest 缓存（上传新包后调用，让客户端立刻看到新版本）。 */

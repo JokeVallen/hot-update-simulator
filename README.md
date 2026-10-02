@@ -106,12 +106,40 @@ npm run docs-check   # 文档覆盖度：代码里的接口/配置/故障类型�
 | `abort` | 下到一半连接被重置 | **断点续传** |
 | `truncate` | 长度声明完整但提前结束 | 内容长度校验 |
 | `corrupt` | **下载成功但内容是坏的** | **md5 校验有没有真做** |
+| `slowThenAbort` | 先卡很久，再下到一半又断 | 超时重试后又断这条完整链路 |
 | `empty` | 200 但响应体为空 | 空文件/空清单 |
 
 `corrupt` 是最容易被忽略的一个：不校验 hash 的客户端会一路"成功"，
 然后在解包或运行时才炸。建议早点用它测一遍。
 
-### 3. 开箱即用的场景方案
+`slowThenAbort` 是唯一的复合类型。单条规则只能表达一个动作，
+而线上最常见的失败链路是两段的：等太久 → 超时重试 → 重试时又断。
+
+### 3. 资源热更与代码热更分成两条轨道
+
+热更在成熟管线里是**分开版本、分开下发**的（YooAsset 的 Package Version vs App Version、
+Addressables、HybridCLR 的 DLL 集）。模拟器两条都支持：
+
+```jsonc
+// storage/assets/Android/manifest.json
+{
+  "version": "1.5.0",            // 资源版本
+  "code": {
+    "version": "2.1.0",          // 代码版本，独立
+    "minAppVersion": "1.2.0",    // 主包低于它就不能热更代码（AOT 元数据门禁）
+    "aotHash": "aot-abc123"      // 期望的 AOT 指纹，不匹配说明不兼容
+  }
+}
+```
+
+`dll/` 下的文件**不进资源清单**，用 `?track=code` 单独取。
+`/api/version` 会返回 `compatible` / `aotMatch` / `requiresAppUpdate`，
+用来测客户端的门禁逻辑——**AOT 元数据不匹配是 HybridCLR 的头号事故，
+编译期没征兆、运行期才炸。**
+
+详见手册的「代码热更怎么放」一节。
+
+### 4. 开箱即用的场景方案
 
 内置 17 个方案，一键切换：`理想网络`、`4G 一般`、`3G 弱网`、`极端弱网`、
 `丢包 20%`、`服务器宕机`、`资产下载中途断流`、`资产内容损坏`、

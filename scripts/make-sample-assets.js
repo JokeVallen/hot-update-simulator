@@ -125,6 +125,22 @@ function main() {
       totalBytes += info.size;
     }
 
+    // 代码热更轨道的示例文件。
+    //
+    // 为什么示例里也要放：代码热更和资源热更是**两条独立轨道**（独立版本 +
+    // AOT 兼容性门禁），只写在文档里是个抽象概念。放两个假 dll 进去，
+    // 启动后 `curl /api/manifest?platform=X&track=code` 就能直接看到效果，
+    // 也能顺便验证客户端把两条轨道分开处理的逻辑。
+    const dllDir = path.join(platformDir, 'dll');
+    fs.mkdirSync(dllDir, { recursive: true });
+    const dllFiles = [
+      { name: 'Assembly-CSharp.dll.bytes', bytes: 256 * 1024, seed: 1001 },
+      { name: 'GameLogic.dll.bytes', bytes: 128 * 1024, seed: 1002 },
+    ];
+    for (const dll of dllFiles) {
+      makeBundle(path.join(dllDir, dll.name), dll.bytes, dll.seed, `${platform}/dll/${dll.name}`);
+    }
+
     // 清单元信息。文件列表故意不写进 manifest.json，
     // 让服务器去扫描目录 —— 这样你手动往目录里丢文件也能立刻生效。
     const manifest = {
@@ -133,6 +149,17 @@ function main() {
       forceUpdate: false,
       notice: `${platform} 示例资源包，由 scripts/make-sample-assets.js 生成`,
       channel: 'default',
+      // 代码轨道。minAppVersion / aotHash 是给客户端做兼容性门禁用的：
+      // 把 minAppVersion 调高，或改掉 aotHash，就能测客户端会不会真的挡住，
+      // 而不是闭着眼睛更一份跑不起来的代码。
+      code: {
+        version: '1.0.0',
+        minAppVersion: '0.9.0',
+        aotHash: 'sample-aot-hash',
+        forceUpdate: false,
+        notice: `${platform} 示例代码包`,
+        dir: 'dll',
+      },
     };
     fs.writeFileSync(
       path.join(platformDir, 'manifest.json'),
