@@ -46,13 +46,6 @@ export class ManualView extends View {
   async render() {
     this.container.innerHTML = `
       ${pageHeader('manual.title', 'manual.intro')}
-      <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-        <a class="btn btn-sm btn-outline-secondary" id="manualSourceLink"
-          href="/manual.md?raw=1" target="_blank" rel="noopener">
-          <i class="bi bi-filetype-md"></i> ${esc(t('manual.viewSource'))}
-        </a>
-        <span class="small text-secondary">${esc(t('manual.sourceHint'))}</span>
-      </div>
       <div id="manualBody">
         <div class="text-secondary small">
           <span class="spinner-border spinner-border-sm"></span> ${esc(t('common.loading'))}
@@ -69,10 +62,6 @@ export class ManualView extends View {
     // 手册按语言分成独立文件（manual.zh-CN.md / manual.en.md），
     // 和 locales/ 的结构保持一致。后端用白名单把语言代码映射成文件名。
     const lang = getLocale()
-
-    // "查看原始 Markdown" 要指向当前语言的源文件
-    const sourceLink = this.container.querySelector('#manualSourceLink')
-    if (sourceLink) sourceLink.href = `/manual.md?lang=${encodeURIComponent(lang)}&raw=1`
 
     try {
       // 显式声明只要 markdown：后端在 /manual.md 上做了内容协商 ——

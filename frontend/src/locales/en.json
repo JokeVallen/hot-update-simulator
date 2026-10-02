@@ -250,8 +250,6 @@
     "title": "Manual",
     "intro": "Feature guide, configuration details, Unity integration sample and troubleshooting. This renders backend/public/manual.en.md; switching to Chinese loads manual.zh-CN.md. Refresh to pick up edits.",
     "toc": "Contents",
-    "viewSource": "View raw Markdown",
-    "sourceHint": "Use this to copy content or download the source",
     "loadFailed": "Failed to load the manual",
     "missing": "No manual is available for this language yet ({lang})"
   },
