@@ -9,11 +9,11 @@
 import { t } from '../locales/index.js'
 import { esc } from '../ui/dom.js'
 
-/** 页面标题 + 说明。 */
-export function pageHeader(titleKey, introKey) {
+/** 页面标题 + 说明。说明可以省略（有些页面自解释，多一段文字只是噪音）。 */
+export function pageHeader(titleKey, introKey = '') {
   return `
     <h2 class="hus-page-title">${esc(t(titleKey))}</h2>
-    <p class="hus-page-intro">${esc(t(introKey))}</p>`
+    ${introKey ? `<p class="hus-page-intro">${esc(t(introKey))}</p>` : ''}`
 }
 
 /** 一个大数字统计卡。 */

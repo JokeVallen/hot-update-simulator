@@ -248,7 +248,6 @@
   },
   "manual": {
     "title": "使用手册",
-    "intro": "功能说明、配置详解、Unity 接入示例与排查方法。内容就是 backend/public/manual.zh-CN.md，改完刷新即可；切换到英文时会自动加载 manual.en.md。",
     "toc": "目录",
     "loadFailed": "手册加载失败",
     "missing": "这个语言还没有对应版本的手册（{lang}）"

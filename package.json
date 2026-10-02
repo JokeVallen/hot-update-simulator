@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "ui-check": "node scripts/ui-check.js",
     "arch": "node scripts/arch-report.js",
-    "soak": "node --expose-gc scripts/soak-test.js"
+    "soak": "node --expose-gc scripts/soak-test.js",
+    "docs-check": "node scripts/docs-coverage.js"
   },
   "keywords": [
     "hot-update",

@@ -45,7 +45,7 @@ export class ManualView extends View {
 
   async render() {
     this.container.innerHTML = `
-      ${pageHeader('manual.title', 'manual.intro')}
+      ${pageHeader('manual.title')}
       <div id="manualBody">
         <div class="text-secondary small">
           <span class="spinner-border spinner-border-sm"></span> ${esc(t('common.loading'))}

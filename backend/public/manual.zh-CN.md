@@ -212,6 +212,27 @@ storage/assets/
 > 实测连成熟的静态检测器 `safe-regex2` 也拦不住这一类模式。
 > 通配符编译出来的匹配是线性时间的，代价可控。
 
+### 规则的动作字段
+
+| 字段 | 适用的 type | 说明 |
+|---|---|---|
+| `type` | 全部 | 故障类型，取值见上表 |
+| `status` | `status` | 返回的状态码，100~599 |
+| `body` | `status` | 自定义响应体；留空则用一句默认提示文本 |
+| `ratio` | `abort` `truncate` `corrupt` | 作用在多大比例的数据上，0.01~1 |
+| `delayMs` | `slowHeader` | 响应头延迟多久才返回，不填默认 3000 毫秒 |
+
+`ratio` 是最不直观的一个，它决定"坏在多深"。以 `ratio: 0.5` 为例：
+
+| 类型 | 实际效果 |
+|---|---|
+| `abort` | 数据发到一半就掐断连接，客户端只能重下或从断点续传 |
+| `truncate` | 只发一半就正常结束，但 `Content-Length` 声明的仍是完整长度 |
+| `corrupt` | 长度完全不变，把中间一半的字节改坏（只有校验才能发现） |
+
+不属于当前 `type` 的字段会被**忽略**：后端按类型只取相关字段，
+面板里的规则编辑器也会把无关字段一并隐藏并禁用，避免"看不见的值被提交上去"。
+
 ### 多条规则谁生效
 
 **列表里最靠前的、符合条件的规则说了算。**
@@ -474,6 +495,30 @@ curl http://localhost:5500/api/system
 灰度必须稳定，否则客户端会一会儿看到新版本、一会儿看到旧版本。
 
 客户端不传 `deviceId` 时不拦截（否则等于把所有人都挡住）。
+
+---
+
+## 自检与测试
+
+项目自带几套检查。改完代码跑一遍，比人肉翻要可靠得多：
+
+```bash
+npm run lint         # ESLint，含复杂度预算（complexity / max-depth / max-lines）
+npm run arch         # 结构：循环依赖 / 分层方向 / 孤儿模块 / 规模分布
+npm run smoke        # 后端端到端：74 项断言，每种故障都真的触发一遍
+npm run regression   # 边界与回归：66 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
+npm run ui-check     # 前端界面：无头 Chrome 走完 8 个路由，并逐页扫描漏翻
+npm run soak         # 稳定性：400 个混合请求，检查内存是否稳定、结束后是否仍可用
+npm run docs-check   # 文档覆盖度：代码里的接口/配置/故障类型有没有漏写进本手册
+```
+
+几点说明：
+
+- `ui-check` 需要 Chrome 或 Edge，会在 `ui-check-shots/` 下给每个页面留一张截图。
+- `smoke`、`regression`、`ui-check` 都会改动 `backend/config.json`，跑完自动还原。
+  中途强杀进程可能留下脏配置，`git diff backend/config.json` 看一眼就知道。
+- `docs-check` 会把代码里真实的接口、配置项、故障类型、面板页面和 npm 脚本抽出来
+  逐项对照本手册。加了新功能却忘了写文档时，它会直接报出来。
 
 ---
 

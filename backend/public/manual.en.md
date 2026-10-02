@@ -64,7 +64,7 @@ Once `http://localhost:5500/` is open (run `npm run build` first), the left side
 |---|---|
 | **Overview** | Start here. Beyond request counts and latency percentiles, the important part is the "Simulation impact" column — it tells you **how many requests the simulator tampered with**. Otherwise a 10-second P95 looks like a backend performance problem when you're the one who dialed the latency up |
 | **Network Simulation** | Tune latency / jitter / bandwidth / packet loss / offline. Changes apply immediately; there is no Save to click |
-| **Fault Injection** | Add rules. The right-hand side spells out which client capability each of the 7 fault types tests, so you don't have to guess which one to pick |
+| **Faults** | Add rules. The right-hand side spells out which client capability each of the 7 fault types tests, so you don't have to guess which one to pick |
 | **Presets** | The most used page. 16 scenarios, one click each; most of the time you never tune parameters by hand |
 | **Live Logs** | Every request is tagged with what was done to it: `abort`, `+300ms`, `100Kbps`, `Range`… Requests that were killed show "Dropped" in the status column |
 | **API Console** | Verify on the spot: call `/api/version` once and see whether the timing really changed |
@@ -211,6 +211,29 @@ and `?` matches a single character. For example `/assets/**/*.ab`, `/api/version
 > every connection, the control panel included, freezes with it, and the only way out is restarting the process.
 > In practice even a mature static checker like `safe-regex2` doesn't catch this class of pattern.
 > Globs compile down to linear-time matching, so the cost stays bounded.
+
+### Rule Action Fields
+
+| Field | Applies to | Meaning |
+|---|---|---|
+| `type` | all | The fault type, from the table above |
+| `status` | `status` | Status code to return, 100–599 |
+| `body` | `status` | Custom response body; leave it empty for a default notice |
+| `ratio` | `abort` `truncate` `corrupt` | How much of the data to act on, 0.01–1 |
+| `delayMs` | `slowHeader` | How long to delay the headers; defaults to 3000 ms |
+
+`ratio` is the least obvious one — it decides how deep the damage goes.
+With `ratio: 0.5`:
+
+| Type | What actually happens |
+|---|---|
+| `abort` | The connection is killed halfway through; the client must re-download or resume |
+| `truncate` | Half is sent, then the response ends cleanly, while `Content-Length` still claims the full length |
+| `corrupt` | Length is unchanged; the middle half of the bytes is flipped (only verification notices) |
+
+Fields that do not apply to the current `type` are **ignored**: the backend only reads
+the relevant ones, and the panel's rule editor hides and disables the rest so you cannot
+silently submit a value you cannot see.
 
 ### Which Rule Wins When Several Match
 
@@ -474,6 +497,30 @@ Grouping is based on the `deviceId` the client sends (md5, then modulo), so **th
 gray release has to be stable, otherwise a client sees the new version one moment and the old one the next.
 
 When the client sends no `deviceId`, nothing is intercepted (doing so would shut out everyone).
+
+---
+
+## Self-Checks and Tests
+
+The project ships with several checks. Running them after a change beats reading code by eye:
+
+```bash
+npm run lint         # ESLint, with complexity budgets (complexity / max-depth / max-lines)
+npm run arch         # Structure: dependency cycles / layer direction / orphans / size spread
+npm run smoke        # Backend end-to-end: 74 assertions, every fault type actually triggered
+npm run regression   # Edges and regressions: 66 assertions covering chunked / 0-byte / Range / caching / version semantics
+npm run ui-check     # Frontend: headless Chrome walks all 8 routes and scans each page for untranslated text
+npm run soak         # Stability: 400 mixed requests, checks memory stays flat and the server still works afterwards
+npm run docs-check   # Doc coverage: are every endpoint / config key / fault type still written up in this manual?
+```
+
+A few notes:
+
+- `ui-check` needs Chrome or Edge and leaves one screenshot per page in `ui-check-shots/`.
+- `smoke`, `regression` and `ui-check` all modify `backend/config.json` and restore it when done.
+  Killing them mid-run can leave it dirty; `git diff backend/config.json` tells you.
+- `docs-check` pulls the real endpoints, config keys, fault types, panel pages and npm scripts out of
+  the code and compares them against this manual. Add a feature and forget the docs, and it says so.
 
 ---
 
