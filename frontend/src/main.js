@@ -120,10 +120,28 @@ function renderTopbar() {
       : `<i class="bi bi-slash-circle"></i> ${esc(t('status.idle'))}`
   }
 
-  if (footer && state.system) {
-    const platforms = (state.system.platforms || []).length
-    footer.textContent = `${state.system.runtime.node} · ${platforms} platform(s)`
-    footer.title = state.system.paths ? state.system.paths.assetRoot : ''
+  if (footer) {
+    // 版本号来自构建期注入的常量，**后端挂了也能显示** ——
+    // "我到底跑的哪个版本"恰恰是出问题时第一个要确认的事。
+    // 如果 /api/system 回来了而且版本不一致，说明前端产物和后端不是同一版
+    // （典型情况：改了后端没重新构建），这时明确标出来。
+    const built = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '?'
+    const served = state.system && state.system.app ? state.system.app.version : null
+    const mismatch = served && served !== built
+
+    if (state.system) {
+      const platforms = (state.system.platforms || []).length
+      footer.textContent = `v${built} · ${state.system.runtime.node} · ${platforms} platform(s)`
+      footer.title = state.system.paths ? state.system.paths.assetRoot : ''
+    } else {
+      footer.textContent = `v${built}`
+    }
+
+    if (mismatch) {
+      footer.textContent += `  ⚠ 后端是 v${served}`
+      footer.title = `前端产物是 v${built}，后端是 v${served} ——`
+        + '多半是改了后端但没重新构建前端（npm run build）'
+    }
   }
 }
 

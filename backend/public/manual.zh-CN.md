@@ -757,6 +757,8 @@ npm run regression   # 边界与回归：66 项断言，覆盖 chunked / 0 字�
 npm run ui-check     # 前端界面：无头 Chrome 走完 8 个路由，并逐页扫描漏翻
 npm run soak         # 稳定性：400 个混合请求，检查内存是否稳定、结束后是否仍可用
 npm run docs-check   # 文档覆盖度：代码里的接口/配置/故障类型有没有漏写进本手册
+npm run version-check # 版本一致性：版本号格式、两份 package.json、CHANGELOG 条目
+npm run bump minor   # 升版本号（patch|minor|major 或具体版本号），并插入 CHANGELOG 小节
 ```
 
 几点说明：

@@ -775,6 +775,8 @@ npm run regression   # Edges and regressions: 66 assertions covering chunked / 0
 npm run ui-check     # Frontend: headless Chrome walks all 8 routes and scans each page for untranslated text
 npm run soak         # Stability: 400 mixed requests, checks memory stays flat and the server still works afterwards
 npm run docs-check   # Doc coverage: are every endpoint / config key / fault type still written up in this manual?
+npm run version-check # Version consistency: format, both package.json files, and a CHANGELOG entry
+npm run bump minor   # Bump the version (patch|minor|major or an explicit version) and seed a CHANGELOG section
 ```
 
 A few notes:

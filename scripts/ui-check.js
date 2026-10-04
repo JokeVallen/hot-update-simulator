@@ -358,6 +358,22 @@ async function main() {
       conn.cls.includes('ok'),
       `状态点 class=${conn.cls}`);
 
+    // 页脚必须显示版本号。
+    // 这是"改坏了没人会发现"的典型：版本号显示不出来不影响任何功能，
+    // 但恰恰是出问题时第一个要看的东西（"我跑的到底是哪个版本"）。
+    const expectedVersion = require('../package.json').version;
+    const footerProbe = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const f = document.getElementById('husFooterInfo');
+        return JSON.stringify({ text: f ? f.textContent : null });
+      })()`,
+      returnByValue: true,
+    });
+    const footerInfo = JSON.parse(footerProbe.result.value);
+    check('页脚显示当前版本号（与 package.json 一致）',
+      Boolean(footerInfo.text) && footerInfo.text.includes(`v${expectedVersion}`),
+      `期望 v${expectedVersion}，实际「${footerInfo.text}」`);
+
     // ---------------------------------------------------------- 主题切换
     //
     // 光看 data-bs-theme 属性不够 —— 属性设对了但 CSS 没跟上（比如变量名写错）

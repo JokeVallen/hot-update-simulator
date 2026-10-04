@@ -21,6 +21,11 @@ module.exports = function createSystemRouter({ configManager, assetServer }) {
    */
   router.get('/', (req, res) => {
     res.json({
+      // 面板页脚会显示它，用来确认"我现在跑的到底是哪个版本"
+      app: {
+        name: require('../../package.json').name,
+        version: require('../../package.json').version,
+      },
       runtime: {
         node: process.version,
         platform: process.platform,

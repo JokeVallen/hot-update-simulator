@@ -113,6 +113,9 @@ export default [
         ...globals.browser,
         // Vite 注入的
         __DEV__: 'readonly',
+        // 构建期由 vite.config.js 的 define 替换成字面量（版本号来自仓库根的 package.json）
+        __APP_VERSION__: 'readonly',
+        __APP_NAME__: 'readonly',
       },
     },
     rules: {

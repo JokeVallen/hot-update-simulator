@@ -16,6 +16,8 @@
     "arch": "node scripts/arch-report.js",
     "soak": "node --expose-gc scripts/soak-test.js",
     "docs-check": "node scripts/docs-coverage.js",
+    "version-check": "node scripts/version-check.js",
+    "bump": "node scripts/bump-version.js",
     "release": "node scripts/make-release.js"
   },
   "keywords": [

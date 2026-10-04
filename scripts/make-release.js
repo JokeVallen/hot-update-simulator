@@ -66,6 +66,19 @@ function copyDir(from, to) {
 function main() {
   console.log(`打包 ${NAME}\n`);
 
+  // ---- 0. 版本号与变更记录必须一致 ----
+  //
+  // 放在最前面：没有变更记录的版本不允许打包出去。
+  // 发行包的用途正是"给使用方一个新版本"，而使用方要靠 CHANGELOG 判断
+  // 这次要不要升级、升了会怎样。
+  try {
+    run(process.execPath, ['scripts/version-check.js']);
+  } catch (err) {
+    console.error(String(err.stdout || '').trim());
+    console.error('\n版本检查没过，拒绝打包。');
+    process.exit(1);
+  }
+
   // ---- 1. 工作区必须干净 ----
   //
   // 发行包要能对应到某个确切的提交，否则出问题没法回溯"到底是哪份代码"。

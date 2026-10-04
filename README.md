@@ -132,7 +132,7 @@ cd D:\hus-runtime && npm install && npm start
 npm run lint         # ESLint（含复杂度预算：complexity / max-depth / max-lines）
 npm run arch         # 结构：循环依赖 / 分层方向 / 孤儿模块 / 规模分布
 npm run smoke        # 后端端到端：74 项断言，每种故障都真的触发一遍
-npm run regression   # 边界与回归：66 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
+npm run regression   # 边界与回归：122 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
 npm run ui-check     # 前端界面：无头 Chrome 走完 8 个路由，并逐页扫描漏翻
 npm run soak         # 稳定性：400 个混合请求，检查内存是否稳定、结束后是否仍可用
 npm run docs-check   # 文档覆盖度：代码里的接口/配置/故障类型有没有漏写进手册
@@ -143,6 +143,44 @@ npm run docs-check   # 文档覆盖度：代码里的接口/配置/故障类型�
 
 文档也是被检查的：`docs-check` 把接口、配置项、故障类型、面板页面和 npm 脚本
 从代码里抽出来逐项对照手册，加了功能忘了写文档时会直接报出来。
+
+### 版本与变更记录
+
+版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，变更记录见
+[`CHANGELOG.md`](CHANGELOG.md)（格式参考 Keep a Changelog）。
+
+**`package.json` 里的 `version` 是唯一来源。** Swagger 信息、面板页脚、发行包名
+全都从它派生，不单独维护。面板左下角常驻显示当前版本，方便确认"我跑的到底是哪个"。
+
+发一个新版本：
+
+```bash
+npm run bump minor          # 或 patch / major / 具体版本号如 1.2.0
+```
+
+它会**一次做完该同步的三件事**，这正是最容易漏的地方：
+
+| 它做什么 | 漏了会怎样 |
+|---|---|
+| 改根 `package.json` | —— |
+| 改 `frontend/package.json` | 两处版本号漂移，而且看起来都"像"是对的 |
+| 在 `CHANGELOG.md` 插入带日期的小节 | 用的人不知道这次要不要升级、升了会怎样 |
+
+然后填 CHANGELOG、提交、打 tag、打包：
+
+```bash
+# 1. 把改动填进 CHANGELOG.md 新插入的小节（新增 / 变更 / 修复）
+git add -A && git commit -m "chore: 发布 1.1.0"
+git tag v1.1.0
+npm run release
+```
+
+**`npm run version-check`** 会校验版本号格式、两处 package.json 是否一致、
+CHANGELOG 里有没有当前版本的小节。它也被 `npm run release` 自动调用——
+**没有变更记录的版本不允许打包出去**。
+
+> 不用 `npm version`：它只改当前目录的 `package.json`，不会碰 `frontend/` 那份，
+> 正好会造成上面那种漂移。
 
 ### 安全边界
 

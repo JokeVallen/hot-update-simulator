@@ -237,7 +237,8 @@ const swaggerSpec = swaggerJsdoc({
     openapi: '3.0.0',
     info: {
       title: '热更新模拟器 API',
-      version: '1.0.0',
+      // 从 package.json 派生，不单独维护 —— 否则改版本号时一定会漏掉这里
+      version: require('../package.json').version,
       description:
         '模拟真实游戏热更新服务端的接口。\n\n'
         + '注意：`/api/version`、`/api/manifest`、`/api/check`、`/assets/*` 会经过网络模拟与故障注入；'
