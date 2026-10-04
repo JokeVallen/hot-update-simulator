@@ -17,6 +17,13 @@ const { EventEmitter } = require('events');
 const faultRule = require('./faultRule');
 
 /**
+ * 旧版本里 assetDir 的默认值（当时相对 backend/ 解析）。
+ * 现在 assetDir 相对「存储根」解析，这个值在新规则下会指到奇怪的地方，
+ * 所以加载时把它识别出来换回新默认值。只认这一个确切的历史值。
+ */
+const LEGACY_ASSET_DIR = '../storage/assets';
+
+/**
  * 默认配置。config.json 里缺失的字段一律用这里的值补齐。
  */
 const DEFAULTS = {
@@ -28,9 +35,13 @@ const DEFAULTS = {
     // 确实需要给手机/真机联调时，显式改成 0.0.0.0，并意识到这个风险。
     host: '127.0.0.1',
     port: 5500,
-    // 以下两个路径都是相对 backend/ 目录的
+    // publicDir 是**项目文件**，相对 backend/ 解析。
     publicDir: 'public',
-    assetDir: '../storage/assets',
+    // assetDir 是**运行时数据**，相对「存储根」解析（见 core/paths.js）：
+    // 默认存储根是 <项目>/storage，所以 'assets' 就是 <项目>/storage/assets。
+    // 设了 HOT_UPDATE_STORAGE 之后它会跟着一起搬走 —— 这是隔离的关键。
+    // 要指向别处（比如 Unity 工程的构建产物目录）就写**绝对路径**。
+    assetDir: 'assets',
     enableBrowse: true,
     enableDocs: true,
   },
@@ -174,6 +185,14 @@ class ConfigManager extends EventEmitter {
     c.server.host = String(c.server.host || DEFAULTS.server.host);
     c.server.publicDir = String(c.server.publicDir || DEFAULTS.server.publicDir);
     c.server.assetDir = String(c.server.assetDir || DEFAULTS.server.assetDir);
+    // 迁移：旧版本的默认值是 '../storage/assets'（相对 backend/）。
+    // 现在 assetDir 相对存储根解析，旧值会指到 <storageRoot>/../storage/assets
+    // 这种地方去。把它当成"没设置"，换回新默认值。
+    // 只认这一个确切的历史值，用户自己填的路径一律不动。
+    if (c.server.assetDir === LEGACY_ASSET_DIR) {
+      c.server.assetDir = DEFAULTS.server.assetDir;
+      c._migrated = true;
+    }
 
     c.network.enabled = Boolean(c.network.enabled);
     c.network.offline = Boolean(c.network.offline);
@@ -310,11 +329,18 @@ class ConfigManager extends EventEmitter {
     }
   }
 
-  /** 把配置里的相对路径解析成绝对路径。 */
-  resolvePath(keyPath) {
+  /** 把配置里的相对路径解析成绝对路径。
+   *
+   * @param {string} keyPath 配置里的键路径，如 server.assetDir
+   * @param {string} [baseDir] 相对路径的解析基准。不传则按 backend/ 解析
+   *   （publicDir 这类**项目文件**该这么算）；
+   *   assetDir 这类**运行时数据**要显式传 storageRoot()。
+   */
+  resolvePath(keyPath, baseDir) {
     const value = this.get(keyPath);
     if (!value) return null;
-    return path.isAbsolute(value) ? value : path.resolve(__dirname, '..', value);
+    if (path.isAbsolute(value)) return value;
+    return path.resolve(baseDir || path.resolve(__dirname, '..'), value);
   }
 }
 

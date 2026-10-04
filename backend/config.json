@@ -3,7 +3,7 @@
     "host": "127.0.0.1",
     "port": 5500,
     "publicDir": "public",
-    "assetDir": "../storage/assets",
+    "assetDir": "assets",
     "enableBrowse": true,
     "enableDocs": true
   },

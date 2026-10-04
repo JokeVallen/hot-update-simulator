@@ -566,7 +566,7 @@ curl http://localhost:5500/api/system
 {
   "server": {
     "port": 5500,              // 必须和 .env 的 VITE_API_BASE_URL 一致
-    "assetDir": "../storage/assets",   // 相对 backend/ 目录
+    "assetDir": "assets",      // 相对「存储根」解析，见下面「运行时数据放哪」
     "enableBrowse": true,      // /browse 目录浏览
     "enableDocs": true         // /docs 接口文档
   },
@@ -603,6 +603,53 @@ curl http://localhost:5500/api/system
 | 2000 | 2 Mbps（4G） | 约 40 秒 |
 | 400 | 400 Kbps（3G） | 约 200 秒 |
 | 100 | 100 Kbps（极端弱网） | 约 13 分钟 |
+
+---
+
+## 运行时数据放哪（和开发项目隔离）
+
+模拟器**不会往项目外写任何东西**，它的全部运行时数据只有两处：
+
+| 内容 | 位置 | 进 git 吗 |
+|---|---|---|
+| 示例热更包、预置方案、收藏 | 存储根（默认 `<项目>/storage`） | 否，已 gitignore |
+| 模拟参数、故障规则等配置 | `backend/config.json` | **是**，这是项目文件 |
+
+资产目录对服务器是**只读**的——没有任何代码会往里写或删。
+`npm run sample --clean` 也只删存储根下的 `assets/`，
+**不可能碰到你 Unity 工程的构建产物**。
+
+### 把数据挪到项目外面
+
+设一个环境变量就行：
+
+```bash
+# .env 里加一行，或者启动时带上
+HOT_UPDATE_STORAGE=D:\hus-data
+```
+
+之后示例包、预置方案、收藏全都落在 `D:\hus-data`，项目目录里干干净净。
+相对路径按**项目根**解析（不是当前工作目录，所以从 IDE 里启动也不会跑偏）。
+
+`npm run sample` 和服务器读的是**同一个**存储根，不会各写各的。
+装到哪儿可以用这条确认：
+
+```bash
+curl http://localhost:5500/api/system
+# paths.storageRoot / paths.assetRoot / paths.storageRootOverridden
+```
+
+### 想直接测 Unity 构建出来的真实包
+
+把 `assetDir` 写成**绝对路径**指向构建产物目录即可：
+
+```jsonc
+{ "server": { "assetDir": "D:\\MyUnityProject\\ServerData\\Android" } }
+```
+
+这样 Unity 一构建就能测，不用手动复制。注意服务器只读不写，
+但你的真实热更包会通过 `http://127.0.0.1:5500/assets/...` 暴露出来——
+默认只监听回环地址，所以仅限本机。
 
 ---
 

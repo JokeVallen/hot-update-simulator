@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { storageRoot } = require('../core/paths');
 
 class JsonStore {
   /**
@@ -72,9 +73,15 @@ class JsonStore {
 }
 
 module.exports = JsonStore;
-module.exports.STORAGE_ROOT = path.resolve(__dirname, '..', '..', 'storage');
+// 存储根由 core/paths 决定（默认 <项目>/storage，可用 HOT_UPDATE_STORAGE 改）。
+// 用 getter 而不是加载时算死的常量：routes/system.js 会把它报给界面，
+// 值必须是"现在真实在用"的那个。
+Object.defineProperty(module.exports, 'STORAGE_ROOT', {
+  enumerable: true,
+  get: storageRoot,
+});
 
-/** 拼出 storage/ 下的文件绝对路径。 */
+/** 拼出存储根下的文件绝对路径。 */
 module.exports.storagePath = function storagePath(...segments) {
-  return path.join(module.exports.STORAGE_ROOT, ...segments);
+  return path.join(storageRoot(), ...segments);
 };

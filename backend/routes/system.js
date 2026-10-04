@@ -41,11 +41,14 @@ module.exports = function createSystemRouter({ configManager, assetServer }) {
         heapUsedBytes: process.memoryUsage().heapUsed,
       },
       paths: {
-        // 这两个路径是排查“资源找不到”时最需要确认的信息
+        // 这几个路径是排查"资源找不到"时最需要确认的信息
         configFile: configManager.configPath,
         assetRoot: assetServer.root(),
         assetRootExists: require('fs').existsSync(assetServer.root()),
-        storageRoot: require('../utils/jsonStore').STORAGE_ROOT,
+        storageRoot: require('../core/paths').storageRoot(),
+        // 存储根是不是被环境变量挪走了。排查"我明明设了 HOT_UPDATE_STORAGE
+        // 怎么没生效"时，一眼就能看出来。
+        storageRootOverridden: Boolean(String(process.env.HOT_UPDATE_STORAGE || '').trim()),
       },
       server: configManager.get('server'),
       platforms: assetServer.listPlatforms(),

@@ -17,10 +17,12 @@ const path = require('path');
 const crypto = require('crypto');
 // 删目录不能用 fs.rmSync：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
 // 详见 scripts/lib/safe-rm.js
+const { assetsDir } = require('../backend/core/paths');
 const { removeDirSync } = require('./lib/safe-rm');
 
-const STORAGE_ROOT = path.resolve(__dirname, '..', 'storage');
-const ASSETS_ROOT = path.join(STORAGE_ROOT, 'assets');
+// 必须和服务器用同一个存储根，否则会出现"生成成功但面板里一个平台都没有"。
+// 存储根默认是 <项目>/storage，可用 HOT_UPDATE_STORAGE 改到别处。
+const ASSETS_ROOT = assetsDir();
 
 /** 解析 --key value 形式的参数。 */
 function parseArgs(argv) {

@@ -21,6 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { storageRoot, assetsDir } = require('../core/paths');
 
 /** Unity 常见资源后缀到 MIME 的映射。未知后缀一律当二进制流。 */
 const MIME_TYPES = {
@@ -62,8 +63,10 @@ class AssetServer {
 
   /** 资产根目录的绝对路径。 */
   root() {
-    return this.configManager.resolvePath('server.assetDir')
-      || path.resolve(__dirname, '..', '..', 'storage', 'assets');
+    // 相对路径按「存储根」解析（不是 backend/）：这样默认值 'assets' 会跟着
+    // HOT_UPDATE_STORAGE 一起搬走，服务器和 npm run sample 永远指同一个地方。
+    return this.configManager.resolvePath('server.assetDir', storageRoot())
+      || assetsDir();
   }
 
   /**

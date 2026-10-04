@@ -34,9 +34,39 @@ cd frontend && npm run dev     # 开发模式，5173 端口，自动代理到 55
 npm run build                  # 或者构建成静态文件，由后端直接托管
 ```
 
+### 和开发用的项目隔离
+
+模拟器**不会往自己的目录以外写任何东西**。全部运行时数据只有两处：
+
+| 内容 | 位置 | 进 git 吗 |
+|---|---|---|
+| 示例热更包、预置方案、收藏 | `<项目>/storage`（默认） | 否，已 gitignore |
+| 模拟参数、故障规则 | `backend/config.json` | 是，这是项目文件 |
+
+资产目录对服务器**只读**——没有任何代码会往里写或删。
+`npm run sample --clean` 只清 `<存储根>/assets/`，
+**碰不到你 Unity 工程的构建产物**。
+
+想把数据整个挪到项目外面：
+
+```bash
+# .env 里加一行
+HOT_UPDATE_STORAGE=D:\hus-data
+```
+
+之后示例包、方案、收藏全落在 `D:\hus-data`。`npm run sample` 和服务器读的是
+**同一个存储根**，不会各写各的（这条有一致性断言把关）。
+相对路径按**项目根**解析，所以从 IDE 里启动也不会跑偏。
+
+想直接测 Unity 构建出来的真实包，把 `assetDir` 写成**绝对路径**指向构建产物目录：
+
+```jsonc
+{ "server": { "assetDir": "D:\\MyUnityProject\\ServerData\\Android" } }
+```
+
 ### 可视化面板
 
-构建之后打开 `http://localhost:5500/`，共 7 个页面：
+构建之后打开 `http://localhost:5500/`，侧栏共 9 项（8 个页面 + API 文档外链）：
 
 | 页面 | 做什么 |
 |---|---|

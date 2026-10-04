@@ -576,7 +576,7 @@ curl http://localhost:5500/api/system
 {
   "server": {
     "port": 5500,              // Must match VITE_API_BASE_URL in .env
-    "assetDir": "../storage/assets",   // Relative to the backend/ directory
+    "assetDir": "assets",      // Relative to the storage root; see "Where Runtime Data Lives"
     "enableBrowse": true,      // /browse directory listing
     "enableDocs": true         // /docs API docs
   },
@@ -613,6 +613,54 @@ curl http://localhost:5500/api/system
 | 2000 | 2 Mbps (4G) | ~40 s |
 | 400 | 400 Kbps (3G) | ~200 s |
 | 100 | 100 Kbps (extremely weak link) | ~13 min |
+
+---
+
+## Where Runtime Data Lives (Isolating From Your Project)
+
+The simulator **never writes anything outside its own directory**. All of its runtime data sits in two places:
+
+| What | Where | Committed? |
+|---|---|---|
+| Sample bundles, presets, favorites | The storage root (default `<project>/storage`) | No, gitignored |
+| Simulation settings, fault rules | `backend/config.json` | **Yes** — that is a project file |
+
+The asset directory is **read-only** to the server: no code path writes to or deletes from it.
+`npm run sample --clean` only clears `assets/` under the storage root, so it
+**cannot touch your Unity build output**.
+
+### Moving the data outside the project
+
+One environment variable does it:
+
+```bash
+# Add to .env, or pass it on the command line
+HOT_UPDATE_STORAGE=D:\hus-data
+```
+
+Sample bundles, presets and favorites then live in `D:\hus-data`, leaving the project directory
+clean. Relative paths resolve against the **project root** (not the current working directory),
+so launching from an IDE will not send them somewhere unexpected.
+
+`npm run sample` and the server read the **same** storage root — they cannot drift apart.
+To confirm where things landed:
+
+```bash
+curl http://localhost:5500/api/system
+# paths.storageRoot / paths.assetRoot / paths.storageRootOverridden
+```
+
+### Serving a real Unity build directly
+
+Point `assetDir` at your build output using an **absolute path**:
+
+```jsonc
+{ "server": { "assetDir": "D:\\MyUnityProject\\ServerData\\Android" } }
+```
+
+Unity builds and it is immediately testable — no copying. The server only reads, but note that
+your real bundles become reachable at `http://127.0.0.1:5500/assets/...`; it listens on loopback
+only by default, so that stays local.
 
 ---
 

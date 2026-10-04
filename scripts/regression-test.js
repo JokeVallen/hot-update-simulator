@@ -22,6 +22,7 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const express = require('express');
 // 不能用 fs.rmSync 删目录：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
@@ -29,7 +30,10 @@ const express = require('express');
 const { removeDir } = require('./lib/safe-rm');
 
 const CONFIG_PATH = path.resolve(__dirname, '..', 'backend', 'config.json');
-const ASSETS_ROOT = path.resolve(__dirname, '..', 'storage', 'assets');
+// 必须和服务器用同一个存储根，否则设了 HOT_UPDATE_STORAGE 之后，
+// 测试会在旧位置建探测平台、而服务器在新位置找不到它们，于是全红 ——
+// 而且看着像功能坏了。见 backend/core/paths.js。
+const ASSETS_ROOT = require('../backend/core/paths').assetsDir();
 
 let passed = 0;
 let failed = 0;
@@ -101,6 +105,83 @@ async function clearFaults(port) {
 // ============================================================ 纯函数测试
 
 async function testPureFunctions() {
+  section('存储根与隔离（core/paths.js）');
+  const paths = require('../backend/core/paths');
+  const prevStorageEnv = process.env.HOT_UPDATE_STORAGE;
+
+  try {
+    // ---- 默认位置 ----
+    delete process.env.HOT_UPDATE_STORAGE;
+    check('默认存储根是 <项目>/storage',
+      paths.storageRoot() === path.join(paths.PROJECT_ROOT, 'storage'),
+      paths.storageRoot());
+    check('默认资产目录在存储根下面（两者不会各指一处）',
+      paths.assetsDir() === path.join(paths.storageRoot(), 'assets'),
+      paths.assetsDir());
+
+    // ---- 绝对路径：整棵树跟着搬 ----
+    const probeRoot = path.join(os.tmpdir(), `hus-storage-probe-${process.pid}`);
+    process.env.HOT_UPDATE_STORAGE = probeRoot;
+    check('HOT_UPDATE_STORAGE 为绝对路径时存储根就是它',
+      paths.storageRoot() === probeRoot, paths.storageRoot());
+    check('设了环境变量后 jsonStore 也跟着走（原来这里指的还是旧目录）',
+      require('../backend/utils/jsonStore').storagePath('presets.json')
+        === path.join(probeRoot, 'presets.json'),
+      require('../backend/utils/jsonStore').storagePath('presets.json'));
+
+    // ---- 相对路径按项目根解析，不是按 cwd ----
+    process.env.HOT_UPDATE_STORAGE = './some-relative-dir';
+    check('相对路径按项目根解析（不是按当前工作目录）',
+      paths.storageRoot() === path.join(paths.PROJECT_ROOT, 'some-relative-dir'),
+      paths.storageRoot());
+
+    // ---- 服务器和示例生成脚本必须指同一个地方 ----
+    //
+    // 这条是整个改动的核心目的：以前两者各写各的，一旦不一致就会出现
+    // "npm run sample 说生成成功，面板里却一个平台都没有"。
+    delete process.env.HOT_UPDATE_STORAGE;
+    const assetServer = require('../backend/app').locals.assetServer;
+    const sampleRoot = require('../backend/core/paths').assetsDir();
+    check('assetServer 的根目录与 make-sample-assets 的写入位置一致',
+      assetServer.root() === sampleRoot,
+      `服务器 ${assetServer.root()} vs 示例脚本 ${sampleRoot}`);
+
+    // ---- 配置里的相对 assetDir 相对存储根解析 ----
+    check('assetDir 默认值 "assets" 解析到存储根下面',
+      path.resolve(paths.storageRoot(), 'assets') === paths.assetsDir(),
+      paths.assetsDir());
+
+    // ---- 旧配置迁移 ----
+    //
+    // 旧版本的 assetDir 默认值是 '../storage/assets'（当时相对 backend/ 解析）。
+    // 新规则下那个值会指到 <storageRoot>/../storage/assets 这种地方去，
+    // 必须在加载时识别出来换回新默认值。
+    const ConfigManager = require('../backend/core/configManager');
+    const tmpCfg = path.join(os.tmpdir(), `hus-cfg-probe-${process.pid}.json`);
+    fs.writeFileSync(tmpCfg, JSON.stringify({ server: { assetDir: '../storage/assets' } }), 'utf8');
+    try {
+      const migrated = new ConfigManager(tmpCfg);
+      check('旧配置里的 assetDir 会被迁移到新默认值',
+        migrated.get('server.assetDir') === 'assets',
+        `迁移后 = ${JSON.stringify(migrated.get('server.assetDir'))}`);
+
+      // 用户自己填的路径不能被误伤
+      fs.writeFileSync(tmpCfg, JSON.stringify({ server: { assetDir: 'D:\\MyBundles' } }), 'utf8');
+      const custom = new ConfigManager(tmpCfg);
+      check('用户自己填的 assetDir 不会被迁移动到',
+        custom.get('server.assetDir') === 'D:\\MyBundles',
+        `得到 ${JSON.stringify(custom.get('server.assetDir'))}`);
+      check('绝对路径的 assetDir 原样使用（可以直接指向 Unity 构建产物）',
+        custom.resolvePath('server.assetDir', paths.storageRoot()) === 'D:\\MyBundles',
+        custom.resolvePath('server.assetDir', paths.storageRoot()));
+    } finally {
+      try { fs.unlinkSync(tmpCfg); } catch { /* 忽略 */ }
+    }
+  } finally {
+    if (prevStorageEnv === undefined) delete process.env.HOT_UPDATE_STORAGE;
+    else process.env.HOT_UPDATE_STORAGE = prevStorageEnv;
+  }
+
   section('版本号比较（api.js 的 compareVersions）');
   const { compareVersions } = require('../backend/routes/api');
 

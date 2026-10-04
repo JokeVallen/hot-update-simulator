@@ -20,7 +20,9 @@ const http = require('http');
 const crypto = require('crypto');
 
 const CONFIG_PATH = path.resolve(__dirname, '..', 'backend', 'config.json');
-const ASSETS_ROOT = path.resolve(__dirname, '..', 'storage', 'assets');
+// 和服务器、示例生成脚本共用同一个存储根（见 backend/core/paths.js），
+// 这样设了 HOT_UPDATE_STORAGE 之后测试仍然找得到资产。
+const ASSETS_ROOT = require('../backend/core/paths').assetsDir();
 
 let passed = 0;
 let failed = 0;
