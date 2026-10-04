@@ -64,6 +64,35 @@ HOT_UPDATE_STORAGE=D:\hus-data
 { "server": { "assetDir": "D:\\MyUnityProject\\ServerData\\Android" } }
 ```
 
+### 在别的设备上用 / 打包成使用版
+
+默认只监听 `127.0.0.1`，别的设备连不上。要开放：
+
+```bash
+HOST=0.0.0.0 npm start        # 然后在别的设备打开 http://<本机IP>:5500
+```
+
+> ⚠️ 控制接口没有认证，绑 `0.0.0.0` 等于开放给同一局域网。只在真机联调时开。
+
+**项目没有单独的发行分支，仓库本身就是产品**，但别把开发目录整个复制过去——
+里面有 `node_modules`、示例包、构建产物，还有一份被使用过程改写过的
+`backend/config.json`。打一个干净的包：
+
+```bash
+npm run release               # → release/hot-update-simulator-1.0.0.tgz
+```
+
+包里只有 git 跟踪的源码 + 构建好的 `dist/`，**不含**任何开发数据，
+而且 `backend/config.json` 会被**重置成默认值**——否则开发时调出来的故障规则
+和模拟参数会跟着进到发行包里。工作区不干净时会拒绝打包（发行包必须对应到
+确切的提交），要强制加 `--force`。
+
+```bash
+mkdir D:\hus-runtime
+tar -xzf hot-update-simulator-1.0.0.tgz -C D:\hus-runtime --strip-components=1
+cd D:\hus-runtime && npm install && npm start
+```
+
 ### 可视化面板
 
 构建之后打开 `http://localhost:5500/`，侧栏共 9 项（8 个页面 + API 文档外链）：

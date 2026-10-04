@@ -80,24 +80,43 @@ app.locals.logger = logger;
 
 const serverCfg = configManager.get('server');
 
+/** 回环地址的各种写法。开发模式下前端在 5173、后端在 5500，属于跨源但可信。 */
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1', '[::1]'];
+
 /**
- * 判断一个 Origin 是不是本机来源。
+ * 判断一个 Origin 是不是"我们自己"的来源。
  *
- * 这是个只在本机跑的开发工具，唯一合法的跨源来源就是本机的另一个端口
- * （开发模式下前端在 5173，通过代理或直连访问后端）。所以只要 hostname
- * 是回环地址就放行，其余一律按跨站处理。
+ * 放行两种情况：
  *
+ *   1. **同源**：Origin 的 host 和请求的 Host 头一致。
+ *      同源请求按定义就不是跨站 —— 浏览器只会对"从本站加载的页面"发这个 Origin。
+ *
+ *      这一条是**跨设备使用的关键**：从另一台设备打开面板时地址是
+ *      `http://192.168.1.5:5500`，页面里的 POST 会带
+ *      `Origin: http://192.168.1.5:5500`。如果只认回环地址，这些请求会被
+ *      当成跨站全部 403 —— 面板在别的设备上就变成了只读的
+ *      （急停按钮、网络参数、故障规则全都点不动），而且完全不报错。
+ *
+ *   2. **回环地址**：开发模式前端 5173 直连后端 5500 时属于跨源但确实是本机。
+ *
+ * 跨站页面的 Origin 两条都不满足，一律拒。
+ *
+ * @param {string|undefined} origin
+ * @param {string|undefined} hostHeader 请求的 Host 头
  * @returns {string|null} 规范化后的 origin（可直接写进响应头）；不合法返回 null
  */
-function normalizeLoopbackOrigin(origin) {
+function normalizeAllowedOrigin(origin, hostHeader) {
   if (!origin) return null;
   try {
     const url = new URL(origin);
-    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)) return null;
+    if (hostHeader && url.host.toLowerCase() === String(hostHeader).toLowerCase()) {
+      return url.origin;
+    }
+    if (LOOPBACK_HOSTS.includes(url.hostname)) return url.origin;
     // 返回 url.origin 而不是原始字符串：原始值可能带路径或非 ASCII
     // （`http://localhost/雪` 能通过 hostname 检查），直接写进响应头会抛
     // ERR_INVALID_CHAR。url.origin 已被规范化成「协议://主机[:端口]」，只含 ASCII。
-    return url.origin;
+    return null;
   } catch {
     return null;
   }
@@ -112,19 +131,26 @@ function normalizeLoopbackOrigin(origin) {
  * 也能 PATCH 掉模拟参数、甚至写入故障规则。
  *
  * 现在：
- *   * 只有本机来源才会拿到 ACAO（跨站页面读不到响应）
- *   * 带非本机 Origin 的状态变更请求（POST/PUT/PATCH/DELETE）直接 403
+ *   * 只有同源 / 回环来源才会拿到 ACAO（跨站页面读不到响应）
+ *   * 带跨站 Origin 的状态变更请求（POST/PUT/PATCH/DELETE）直接 403
  *     （简单请求也能挡住，不依赖 CORS 预检）
+ *
+ * ⚠️ 判定的关键词是**同源**，不是"是不是回环地址"。绑到 0.0.0.0 给别的设备
+ * 用时，面板的地址是 LAN IP，它发出的 POST 属于同源请求 —— 必须放行，
+ * 否则面板在别的设备上会静默变成只读的。
  */
 app.use((req, res, next) => {
   const rawOrigin = req.get('origin');
-  const allowedOrigin = normalizeLoopbackOrigin(rawOrigin);
+  const allowedOrigin = normalizeAllowedOrigin(rawOrigin, req.get('host'));
 
   if (rawOrigin && !allowedOrigin) {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       return res.status(403).json({
-        error: '拒绝跨站的状态变更请求：这个工具只允许本机来源操作',
+        error: '拒绝跨站的状态变更请求：只允许本机或同源页面操作',
         origin: rawOrigin,
+        hint: '如果这是从另一台设备打开面板时报的错，说明 Host 和 Origin 对不上'
+          + '（常见于反向代理改写了 Host）。用 HOST=0.0.0.0 启动并直接访问'
+          + ' http://<本机IP>:5500 即可。',
       });
     }
     // 读请求放行，但不回 ACAO —— 浏览器拿不到响应内容

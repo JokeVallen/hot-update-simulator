@@ -4,6 +4,9 @@ node_modules/
 # 构建产物
 dist/
 
+# 发行包（npm run release 的产出）
+release/
+
 # 运行时数据（预置方案、收藏、上传的热更包等）
 storage/
 

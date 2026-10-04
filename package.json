@@ -15,7 +15,8 @@
     "ui-check": "node scripts/ui-check.js",
     "arch": "node scripts/arch-report.js",
     "soak": "node --expose-gc scripts/soak-test.js",
-    "docs-check": "node scripts/docs-coverage.js"
+    "docs-check": "node scripts/docs-coverage.js",
+    "release": "node scripts/make-release.js"
   },
   "keywords": [
     "hot-update",

@@ -1007,18 +1007,86 @@ async function testAssetEdgeCases() {
       app.locals.assetServer.invalidateManifest();
     }
 
-    // ---------------- CORS 回显 Origin 时必须规范化 ----------------
+    // ---------------- CORS / 跨站防护的判定基准是「同源」 ----------------
     //
-    // 回显原始 Origin 字符串是危险的：`http://localhost/雪` 能通过回环检查，
-    // 但把它写进响应头会抛 ERR_INVALID_CHAR，把一个正常请求打成 500。
-    // 必须回显规范化后的 origin（url.origin 只含「协议://主机[:端口]」）。
+    // 这里曾经有个影响跨设备使用的 bug：判定写成了"Origin 的 hostname 是不是
+    // 回环地址"。于是从另一台设备打开面板时（http://192.168.1.5:5500），
+    // 页面发出的 POST 带着 Origin: http://192.168.1.5:5500，被当成了跨站 ——
+    // 急停、网络参数、故障规则**全部 403**，面板静默变成只读的。
     //
-    // 注意：这里只能测"带路径的 ASCII Origin"。非 ASCII 的 Origin 用 Node 的
-    // http 客户端**发不出去**（客户端自己就会抛 ERR_INVALID_CHAR），要覆盖它
-    // 得手写 socket 原始字节；而规范化逻辑是同一条，url.origin 对回环主机
-    // 一定是纯 ASCII，所以这里测路径被剥掉就足以证明这条路走通了。
-    section('CORS 回显规范化');
+    // 正确的基准是**同源**：Origin 的 host 和请求的 Host 一致就不是跨站，
+    // 浏览器只会对"从本站加载的页面"发这个 Origin。跨站页面两条都不满足。
+    //
+    // 另外：回显原始 Origin 字符串是危险的 —— `http://localhost/雪` 能通过
+    // 回环检查，但写进响应头会抛 ERR_INVALID_CHAR，把正常请求打成 500。
+    // 必须回显规范化后的 url.origin。
+    section('跨站防护（同源判定 + 回显规范化）');
 
+    const LAN = '192.168.1.5:5500';
+
+    // ---- 同源：跨设备使用必须放行 ----
+    const sameOriginWrite = await request(port, '/api/control/disable', {
+      method: 'POST',
+      headers: { Origin: `http://${LAN}`, Host: LAN },
+    });
+    check('同源的写请求放行（跨设备打开面板时「急停」必须能用）',
+      sameOriginWrite.status === 200,
+      `状态 ${sameOriginWrite.status} —— 403 说明面板在别的设备上会变成只读`);
+
+    const sameOriginPatch = await request(port, '/api/control/network', {
+      method: 'PATCH',
+      headers: { Origin: `http://${LAN}`, Host: LAN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    check('同源的 PATCH 放行（改网络参数）',
+      sameOriginPatch.status === 200, `状态 ${sameOriginPatch.status}`);
+
+    const sameOriginRead = await request(port, '/api/logs?limit=1', {
+      headers: { Origin: `http://${LAN}`, Host: LAN },
+    });
+    check('同源的读请求放行',
+      sameOriginRead.status === 200, `状态 ${sameOriginRead.status}`);
+
+    // 本机开发模式：前端 5173 直连后端 5500，跨源但确实是本机
+    const devCrossPort = await request(port, '/api/control/disable', {
+      method: 'POST',
+      headers: { Origin: 'http://localhost:5173', Host: 'localhost:5500' },
+    });
+    check('本机开发模式下前端 5173 直连后端仍放行（回环跨端口）',
+      devCrossPort.status === 200, `状态 ${devCrossPort.status}`);
+
+    // ---- 跨站：必须挡住 ----
+    const evilWrite = await request(port, '/api/control/disable', {
+      method: 'POST',
+      headers: { Origin: 'http://evil.example', Host: LAN },
+    });
+    check('跨站的状态变更请求被 403 拒绝',
+      evilWrite.status === 403, `状态 ${evilWrite.status}`);
+
+    const evilPatch = await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { Origin: 'http://evil.example', Host: LAN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    check('跨站改故障规则被 403 拒绝',
+      evilPatch.status === 403, `状态 ${evilPatch.status}`);
+
+    // 同一个 IP 但不同端口：既不同源也不是回环，仍要挡
+    const crossPort = await request(port, '/api/control/disable', {
+      method: 'POST',
+      headers: { Origin: 'http://192.168.1.5:9999', Host: LAN },
+    });
+    check('同 IP 不同端口既不同源也不回环，仍被拒绝',
+      crossPort.status === 403, `状态 ${crossPort.status}`);
+
+    const evilRead = await request(port, '/api/logs?limit=1', {
+      headers: { Origin: 'http://evil.example', Host: LAN },
+    });
+    check('跨站的读请求放行但不回 ACAO（浏览器读不到内容）',
+      evilRead.status === 200 && !evilRead.headers['access-control-allow-origin'],
+      `状态 ${evilRead.status}, ACAO=${evilRead.headers['access-control-allow-origin']}`);
+
+    // ---- 回显规范化 ----
     const originWithPath = await request(port, '/api/health', {
       headers: { Origin: 'http://localhost:5500/some/path' },
     });
@@ -1027,20 +1095,6 @@ async function testAssetEdgeCases() {
     check('回显的是规范化后的 origin（路径被剥掉）',
       originWithPath.headers['access-control-allow-origin'] === 'http://localhost:5500',
       `实际 ${originWithPath.headers['access-control-allow-origin']}`);
-
-    const evilOrigin = await request(port, '/api/health', {
-      headers: { Origin: 'http://evil.example' },
-    });
-    check('非本机 Origin 不回 ACAO',
-      !evilOrigin.headers['access-control-allow-origin'],
-      `实际 ${evilOrigin.headers['access-control-allow-origin']}`);
-
-    const evilWrite = await request(port, '/api/control/disable', {
-      method: 'POST',
-      headers: { Origin: 'http://evil.example' },
-    });
-    check('非本机 Origin 的状态变更请求被 403 拒绝',
-      evilWrite.status === 403, `状态 ${evilWrite.status}`);
   } finally {
     try { await removeDir(probeDir); } catch { /* 忽略 */ }
     await clearFaults(port).catch(() => {});

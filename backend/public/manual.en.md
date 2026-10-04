@@ -664,6 +664,70 @@ only by default, so that stays local.
 
 ---
 
+## Deployment and Multiple Devices
+
+### Letting other devices connect (phone / real hardware / another PC)
+
+By default it listens on `127.0.0.1` only, so other devices cannot reach it. To open it up:
+
+```bash
+HOST=0.0.0.0 npm start
+```
+
+Then open `http://<your-LAN-IP>:5500` on the other device (`ipconfig` on Windows shows the IPv4 address).
+
+> ⚠️ **The control API has no authentication.** Binding to `0.0.0.0` exposes the simulation
+> settings, fault rules and the full request log to every machine on the same LAN. Turn it on
+> only while testing on real hardware, and turn it back off afterwards. When the bound address
+> is not loopback, the startup log prints a prominent warning.
+
+Two notes:
+
+- **Unity clients** use `/api` and `/assets` and send no `Origin` header — never an issue.
+- **The panel itself** is fully usable from another device, write actions included (panic,
+  parameter changes). The cross-site check is based on **same-origin** (Origin matching Host),
+  not on "is this a loopback address" — otherwise opening the panel via a LAN address would
+  silently turn it read-only through its own protection.
+
+### Packaging a clean usage build (separate from the dev directory)
+
+**The repository is the product; there is no separate release branch.** But you should not copy
+the dev directory wholesale: it holds `node_modules`, sample bundles, build output, and a
+`backend/config.json` that day-to-day use has rewritten.
+
+Build a clean package with:
+
+```bash
+npm run release
+# → release/hot-update-simulator-1.0.0.tgz
+```
+
+It contains the git-tracked sources plus a prebuilt `dist/`, and specifically:
+
+- **No** `node_modules`, no `storage`, none of your development data
+- `backend/config.json` **reset to defaults** — this is the important part: that file is both
+  git-tracked and rewritten by the UI, so fault rules and simulation settings tuned during
+  development would otherwise ship inside the release
+- A `RELEASE.txt` recording which commit it came from and how to run it
+
+Unpack and use it elsewhere:
+
+```bash
+mkdir D:\hus-runtime
+tar -xzf hot-update-simulator-1.0.0.tgz -C D:\hus-runtime --strip-components=1
+cd D:\hus-runtime
+npm install          # backend dependencies only; the frontend is already built
+npm start
+```
+
+A fresh release has no sample assets — run `npm run sample` once, or point
+`HOT_UPDATE_STORAGE` at an existing data directory.
+
+The script refuses to package from a dirty working tree, because a release must map to an exact
+commit. Pass `--force` if you really need to, and it will be noted in `RELEASE.txt`.
+
+---
+
 ## About Gray Release
 
 With `hotUpdate.gray.enabled` on, only clients that fall inside the gray percentage see the new version.

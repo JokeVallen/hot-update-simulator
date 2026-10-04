@@ -653,6 +653,67 @@ curl http://localhost:5500/api/system
 
 ---
 
+## 部署与多设备
+
+### 让别的设备访问（手机 / 真机 / 另一台电脑）
+
+默认只监听 `127.0.0.1`，别的设备连不上。要开放：
+
+```bash
+HOST=0.0.0.0 npm start
+```
+
+然后在别的设备上打开 `http://<本机IP>:5500`（Windows 用 `ipconfig` 看 IPv4 地址）。
+
+> ⚠️ **控制接口没有认证**。绑 `0.0.0.0` 等于把模拟参数、故障规则、全部请求日志
+> 开放给同一局域网里的任何一台机器。只在真机联调时开，用完改回来。
+> 绑的不是回环地址时，启动日志里会有一条醒目警告。
+
+两点说明：
+
+- **Unity 客户端**走 `/api` 和 `/assets`，不带 `Origin` 头，一直没问题。
+- **面板本身**在别的设备上也完全可用，包括急停、改参数这些写操作。
+  跨站防护的判定基准是**同源**（Origin 与 Host 一致即放行），不是"是不是回环
+  地址"——否则从 LAN 地址打开时，面板会被自己的防护静默变成只读的。
+
+### 打包成使用版（和开发目录分开）
+
+**仓库本身就是产品，没有单独的发行分支。** 但你不该把开发目录整个复制过去：
+里面有 `node_modules`、示例包、构建产物，还有一份被使用过程改写过的
+`backend/config.json`。
+
+用这个打一个干净的包：
+
+```bash
+npm run release
+# → release/hot-update-simulator-1.0.0.tgz
+```
+
+包里包含 git 跟踪的源码加构建好的 `dist/`，并且：
+
+- **不含** `node_modules` / `storage` / 任何开发时的数据
+- `backend/config.json` **被重置成默认值**——这是重点：那份文件既被 git 跟踪、
+  又会被界面改写，开发时调出来的故障规则和模拟参数不加处理就会进到发行包里
+- 附一份 `RELEASE.txt`，写明来自哪个提交、怎么用
+
+在别处展开使用：
+
+```bash
+mkdir D:\hus-runtime
+tar -xzf hot-update-simulator-1.0.0.tgz -C D:\hus-runtime --strip-components=1
+cd D:\hus-runtime
+npm install          # 只装后端依赖，前端已经构建好了
+npm start
+```
+
+发行包默认没有示例资产，先跑一次 `npm run sample`，
+或者用 `HOT_UPDATE_STORAGE` 指到一份已有的数据上。
+
+脚本会拒绝在工作区不干净时打包——发行包必须能对应到某个确切的提交。
+确实需要就加 `--force`，它会在 `RELEASE.txt` 里标注出来。
+
+---
+
 ## 关于灰度发布
 
 `hotUpdate.gray.enabled` 打开后，只有落在灰度百分比内的客户端才会看到新版本。
