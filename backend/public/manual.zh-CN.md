@@ -621,12 +621,33 @@ curl http://localhost:5500/api/system
 
 ### 把数据挪到项目外面
 
-设一个环境变量就行：
+**推荐写进 `.env`**（项目根目录）——不用记各家的 shell 语法，直接 `npm start` 就行：
 
-```bash
-# .env 里加一行，或者启动时带上
+```ini
+# .env
 HOT_UPDATE_STORAGE=D:\hus-data
 ```
+
+> ⚠️ 路径用反斜杠或正斜杠都行，但**不要加引号**。目录不用自己建。
+
+也可以在命令行临时指定，但**每个 shell 的写法不一样**，这是最容易踩的坑：
+
+```bash
+# Git Bash / WSL / macOS / Linux
+HOT_UPDATE_STORAGE=D:/hus-data npm start
+```
+
+```bat
+:: Windows cmd —— 注意不能写成 VAR=value 的形式，cmd 不认那种语法
+set HOT_UPDATE_STORAGE=D:\hus-data && npm start
+```
+
+```powershell
+# Windows PowerShell
+$env:HOT_UPDATE_STORAGE='D:\hus-data'; npm start
+```
+
+三者等价。命令行设置**优先级高于 `.env`**，临时试一下很方便。
 
 之后示例包、预置方案、收藏全都落在 `D:\hus-data`，项目目录里干干净净。
 相对路径按**项目根**解析（不是当前工作目录，所以从 IDE 里启动也不会跑偏）。

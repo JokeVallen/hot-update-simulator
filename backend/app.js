@@ -23,8 +23,10 @@ const serveIndex = require('serve-index');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 
-// .env 在仓库根目录，不在 backend/ 下
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+// .env 由 core/paths 统一加载，这里只需要保证它**最先**被 require，
+// 环境变量才会在后面的模块读 process.env 之前就位。
+// 不要在这里再加载一次 dotenv：两处加载会变成"谁先谁后"的隐式依赖。
+require('./core/paths');
 
 const ConfigManager = require('./core/configManager');
 const NetworkSimulator = require('./modules/networkSimulator');

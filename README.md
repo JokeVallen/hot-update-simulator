@@ -47,16 +47,29 @@ npm run build                  # 或者构建成静态文件，由后端直接�
 `npm run sample --clean` 只清 `<存储根>/assets/`，
 **碰不到你 Unity 工程的构建产物**。
 
-想把数据整个挪到项目外面：
+想把数据整个挪到项目外面，**推荐写进 `.env`**（不用记 shell 语法）：
 
-```bash
-# .env 里加一行
+```ini
+# .env
 HOT_UPDATE_STORAGE=D:\hus-data
 ```
 
 之后示例包、方案、收藏全落在 `D:\hus-data`。`npm run sample` 和服务器读的是
 **同一个存储根**，不会各写各的（这条有一致性断言把关）。
 相对路径按**项目根**解析，所以从 IDE 里启动也不会跑偏。
+
+命令行也能临时指定，但各家 shell 写法不同，**cmd 不认 `VAR=value` 那种写法**：
+
+```bat
+:: cmd
+set HOT_UPDATE_STORAGE=D:\hus-data && npm start
+
+:: PowerShell
+$env:HOT_UPDATE_STORAGE='D:\hus-data'; npm start
+
+:: Git Bash / WSL
+HOT_UPDATE_STORAGE=D:/hus-data npm start
+```
 
 想直接测 Unity 构建出来的真实包，把 `assetDir` 写成**绝对路径**指向构建产物目录：
 

@@ -1,6 +1,6 @@
 // backend/core/paths.js
 //
-// 「运行时数据放哪」的唯一事实来源。
+// 「运行时数据放哪」的唯一事实来源，同时也是 **.env 的唯一加载点**。
 //
 // 为什么需要单独一个模块：
 //   在这之前，存储位置散在三处，而且互不知情 ——
@@ -10,17 +10,34 @@
 //   后果是"想让数据离开项目目录"根本做不到，而且三者一旦不一致就会出现
 //   很难查的现象：`npm run sample` 明明说生成成功，面板里却一个平台都没有。
 //
-// 现在统一走这里：默认 <项目>/storage，用环境变量 HOT_UPDATE_STORAGE 可以
-// 指到任何地方（相对路径按项目根解析，绝对路径原样用）。
+// 为什么 .env 在这里加载：
+//   原来只有 backend/app.js 加载 dotenv。于是把 HOT_UPDATE_STORAGE 写进 .env
+//   时，**服务器读得到、scripts/ 下的脚本读不到** ——
+//   服务器去 D:\hus-data 找资产，npm run sample 却写到项目内的 storage，
+//   两边都不报错，面板里一个平台都没有。踩过一次，别再踩。
+//   放在这里之后，任何 require 本模块的入口（服务器、示例生成、测试脚本、
+//   发行包）都拿到同一份配置，不用谁记得去加载。
 //
-// 这是「把模拟器和开发用的项目隔离开」的主要开关：
-//   HOT_UPDATE_STORAGE=D:\hus-data npm start
-// 之后示例包、预置方案、收藏全都落在 D:\hus-data，项目目录里干干净净。
+// 加载顺序很重要：dotenv 必须在读取 process.env 之前执行，
+// 所以这一段放在模块顶部；storageRoot() 又是每次调用时才读 process.env。
 
 const path = require('path');
 
 /** 项目根目录（本文件在 backend/core/ 下，往上两级）。 */
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+
+// dotenv 是可选依赖：万一没装或 .env 不存在，也只是没有 .env 支持，
+// 不该让整个项目起不来。
+try {
+  require('dotenv').config({
+    path: path.join(PROJECT_ROOT, '.env'),
+    // 已经存在的环境变量优先：命令行的显式设置要能盖过 .env 文件
+    override: false,
+    quiet: true,
+  });
+} catch {
+  // 走默认值，不影响使用
+}
 
 /**
  * 运行时数据的根目录（绝对路径）。

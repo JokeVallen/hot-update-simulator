@@ -24,6 +24,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const express = require('express');
 // 不能用 fs.rmSync 删目录：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
 // 详见 scripts/lib/safe-rm.js 的说明。
@@ -151,7 +152,71 @@ async function testPureFunctions() {
       path.resolve(paths.storageRoot(), 'assets') === paths.assetsDir(),
       paths.assetsDir());
 
-    // ---- 旧配置迁移 ----
+    // ---- 所有入口都必须经过 paths.js ----
+    //
+    // 这一组是补上次漏掉的一个维度：**配置能不能到达每个入口**。
+    //
+    // 之前的 bug 是：HOT_UPDATE_STORAGE 写在命令行的环境变量里时一切正常，
+    // 但写进 .env 文件时只有服务器读得到 —— 因为 dotenv 只在 backend/app.js
+    // 里加载过，scripts/ 下的脚本从不经过它。结果是服务器去 A 找资产、
+    // npm run sample 写到 B，两边都不报错，面板里一个平台都没有。
+    //
+    // 原来的断言全是用 process.env 直接设的，等于只测了"函数内部算得对"，
+    // 没测"用户到达这个函数的每条路都通"。下面两条分别堵住两个方向。
+    const src = (rel) => fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf8');
+
+    // 方向一：.env 只能有一个加载点，而且必须是 paths.js
+    const jsFiles = [];
+    const collect = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'node_modules') continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) collect(full);
+        else if (e.name.endsWith('.js')) jsFiles.push(full);
+      }
+    };
+    collect(path.resolve(__dirname, '..', 'backend'));
+    collect(path.resolve(__dirname, '..', 'scripts'));
+    const dotenvLoaders = jsFiles
+      .filter((f) => /require\('dotenv'\)/.test(fs.readFileSync(f, 'utf8')))
+      .map((f) => path.relative(path.resolve(__dirname, '..'), f).replace(/\\/g, '/'));
+    check('.env 只有一处加载点，且在 core/paths.js 里',
+      dotenvLoaders.length === 1 && dotenvLoaders[0] === 'backend/core/paths.js',
+      `实际加载者：${dotenvLoaders.join(', ') || '（无）'}`);
+    check('backend/app.js 只做副作用引入，不再自己加载 dotenv',
+      !/require\('dotenv'\)/.test(src('backend/app.js')),
+      'app.js 里又出现了 dotenv 加载');
+
+    // 方向二：不许有第二份"存储位置"的推导逻辑
+    const dupe = [
+      ['scripts/make-sample-assets.js', /path\.resolve\(__dirname,\s*'\.\.',\s*'storage'/],
+      ['scripts/regression-test.js', /path\.resolve\(__dirname,\s*'\.\.',\s*'storage'/],
+      ['scripts/smoke-test.js', /path\.resolve\(__dirname,\s*'\.\.',\s*'storage'/],
+      ['backend/utils/jsonStore.js', /path\.resolve\(__dirname,\s*'\.\.',\s*'\.\.',\s*'storage'/],
+    ].filter(([rel, re]) => re.test(src(rel)));
+    check('没有第二处硬编码的 storage 路径（一律走 core/paths）',
+      dupe.length === 0,
+      dupe.length ? `这些文件又自己算了一遍：${dupe.map(([r]) => r).join(', ')}` : '');
+
+    // ---- 命令行环境变量必须能到达所有入口 ----
+    //
+    // 用子进程验证，因为 process.env 在当前进程里已经被解析过了。
+    const entryProbe = path.join(os.tmpdir(), `hus-entry-probe-${process.pid}`);
+    const runWith = (args) => execFileSync(process.execPath, args, {
+      cwd: path.resolve(__dirname, '..'),
+      encoding: 'utf8',
+      env: { ...process.env, HOT_UPDATE_STORAGE: entryProbe },
+    }).trim();
+
+    const serverSees = runWith(['-e', "console.log(require('./backend/core/paths').storageRoot())"]);
+    check('命令行环境变量能到达服务器侧',
+      serverSees === entryProbe, serverSees);
+
+    const scriptSees = runWith(['-e', "console.log(require('./backend/core/paths').assetsDir())"]);
+    check('命令行环境变量能到达脚本侧（同一个模块，不会再各写各的）',
+      scriptSees === path.join(entryProbe, 'assets'), scriptSees);
+
+    // ---- 回归：旧的 assetDir 值迁移 ----
     //
     // 旧版本的 assetDir 默认值是 '../storage/assets'（当时相对 backend/ 解析）。
     // 新规则下那个值会指到 <storageRoot>/../storage/assets 这种地方去，

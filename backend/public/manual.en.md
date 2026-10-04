@@ -631,12 +631,37 @@ The asset directory is **read-only** to the server: no code path writes to or de
 
 ### Moving the data outside the project
 
-One environment variable does it:
+**Put it in `.env`** (at the project root) — no shell-specific syntax to remember, and `npm start`
+just works:
 
-```bash
-# Add to .env, or pass it on the command line
+```ini
+# .env
 HOT_UPDATE_STORAGE=D:\hus-data
 ```
+
+> ⚠️ Backslashes or forward slashes are both fine, but **do not add quotes**. The directory is
+> created for you.
+
+You can also set it on the command line, but **every shell spells it differently** — this is the
+easiest thing to get wrong:
+
+```bash
+# Git Bash / WSL / macOS / Linux
+HOT_UPDATE_STORAGE=D:/hus-data npm start
+```
+
+```bat
+:: Windows cmd — note it does NOT accept the VAR=value form
+set HOT_UPDATE_STORAGE=D:\hus-data && npm start
+```
+
+```powershell
+# Windows PowerShell
+$env:HOT_UPDATE_STORAGE='D:\hus-data'; npm start
+```
+
+All three are equivalent. A command-line value **takes precedence over `.env`**, which is handy for
+a quick experiment.
 
 Sample bundles, presets and favorites then live in `D:\hus-data`, leaving the project directory
 clean. Relative paths resolve against the **project root** (not the current working directory),
