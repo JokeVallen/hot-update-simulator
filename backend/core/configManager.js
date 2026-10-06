@@ -63,6 +63,12 @@ const DEFAULTS = {
   hotUpdate: {
     defaultChannel: 'default',
     channels: ['default', 'beta', 'dev'],
+    // 文件摘要算法。**第一个是主算法**：清单里的 hash 字段和资产的 ETag
+    // 都用它，所以两者是同一个值 —— 客户端拿到清单就能本地判断
+    // "我这份文件还要不要下"，不必再发条件请求。
+    // 可以配多个（如 ['sha256','md5']）：算多个不额外增加 I/O，
+    // 只多 update 一次摘要。
+    hashAlgorithms: ['md5'],
     gray: {
       enabled: false,
       percent: 0,
@@ -227,6 +233,21 @@ class ConfigManager extends EventEmitter {
     }
     c.hotUpdate.gray.enabled = Boolean(c.hotUpdate.gray.enabled);
     c.hotUpdate.gray.percent = clamp(c.hotUpdate.gray.percent, 0, 100);
+
+    // 摘要算法：只留 Node 真的支持的，空列表回退默认值。
+    // 过滤放在这里而不是使用处，是为了让"配错了"在写配置时就暴露出来，
+    // 而不是等到某个请求算摘要失败。
+    {
+      const raw = Array.isArray(c.hotUpdate.hashAlgorithms)
+        ? c.hotUpdate.hashAlgorithms
+        : [c.hotUpdate.hashAlgorithms];
+      const valid = raw
+        .map((a) => String(a || '').toLowerCase().trim())
+        .filter((a) => a && crypto.getHashes().includes(a));
+      c.hotUpdate.hashAlgorithms = valid.length
+        ? [...new Set(valid)]
+        : DEFAULTS.hotUpdate.hashAlgorithms.slice();
+    }
 
     c.logging.maxEntries = Math.round(clamp(c.logging.maxEntries, 10, 100000));
 

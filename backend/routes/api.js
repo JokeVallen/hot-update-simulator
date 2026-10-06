@@ -19,6 +19,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const { protocolMeta, negotiate } = require('../core/protocol');
 
 /**
  * 比较两个版本号。
@@ -191,6 +192,8 @@ function buildVersionDecision({ manifest, query, hotUpdate }) {
   );
 
   return {
+    ...protocolMeta({ hashAlgorithms: manifest.hashAlgorithms }),
+    ...negotiate(query.protocol),
     platform: manifest.platform,
     channel,
     version: manifest.version,
@@ -202,12 +205,57 @@ function buildVersionDecision({ manifest, query, hotUpdate }) {
     notice: manifest.notice,
     fileCount: manifest.fileCount,
     totalSize: manifest.totalSize,
-    manifestUrl: `/api/manifest?platform=${encodeURIComponent(manifest.platform)}&channel=${encodeURIComponent(channel)}`,
+    // 清单身份。客户端在第 2 步（取清单）回传它，就能发现
+    // "第 1 步和第 2 步之间有人改了配置"，而不是下到一半才发现不对。
+    manifestId: manifest.manifestId,
+    manifestUrl: `/api/manifest?platform=${encodeURIComponent(manifest.platform)}`
+      + `&channel=${encodeURIComponent(channel)}&expectId=${encodeURIComponent(manifest.manifestId || '')}`,
     generatedAt: manifest.generatedAt,
     // 代码热更轨道；平台没配 code 块时为 null（客户端据此知道这个平台没有代码热更）
     code: buildCodeDecision({ code: manifest.code, query, appVersion }),
     ...(grayBlocked ? { grayBlocked: true, grayPercent: hotUpdate.gray.percent } : {}),
   };
+}
+
+/**
+ * 清单身份校验，用于消除「版本接口」和「清单接口」之间的竞态。
+ *
+ * 客户端典型流程是两步：先问版本、再取清单。两步之间如果有人改了配置，
+ * 客户端会拿到新版本的文件列表，却以为自己在做旧版本的更新 ——
+ * 而且**不报错**，只是下到一半发现对不上。
+ *
+ * 支持两种固定方式：
+ *   ?expectId=<manifestId>   —— 精确匹配清单身份（推荐）
+ *   ?expectVersion=<version> —— 只比对版本号（客户端实现更简单）
+ *
+ * 对不上就返回 409，并把当前的真实身份带上，客户端可以直接重来。
+ *
+ * @returns {boolean} 校验通过返回 true；已响应 409 则返回 false
+ */
+function checkManifestPin(manifest, query, res) {
+  const expectId = query.expectId ? String(query.expectId) : null;
+  const expectVersion = query.expectVersion ? String(query.expectVersion) : null;
+  if (!expectId && !expectVersion) return true;
+
+  const idOk = !expectId || expectId === manifest.manifestId;
+  const versionOk = !expectVersion || compareVersions(expectVersion, manifest.version) === 0;
+  if (idOk && versionOk) return true;
+
+  res.status(409).json({
+    error: '清单已经变了：你请求的这一版已经不在服务器上',
+    hint: '重新调一次 /api/version 再走一遍流程。'
+      + '竞态只会在"取版本"和"取清单"之间有人改配置时发生，'
+      + '这也是真实热更服务端会遇到的问题。',
+    ...protocolMeta({ hashAlgorithms: manifest.hashAlgorithms }),
+    expected: { manifestId: expectId, version: expectVersion },
+    actual: {
+      platform: manifest.platform,
+      version: manifest.version,
+      manifestId: manifest.manifestId,
+      generatedAt: manifest.generatedAt,
+    },
+  });
+  return false;
 }
 
 /** 资源清单里只带代码轨道的摘要，不重复整份文件列表。要下代码就 ?track=code。 */
@@ -315,6 +363,36 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
 
   /**
    * @openapi
+   * /api/protocol:
+   *   get:
+   *     tags: [热更接口]
+   *     summary: 协议版本与能力声明（不需要 platform，客户端启动时先问这个）
+   *     responses:
+   *       200: { description: protocolVersion / capabilities / hashAlgorithms }
+   */
+  router.get('/protocol', async (req, res, next) => {
+    try {
+      const manifest = null; // 不依赖任何平台
+      void manifest;
+      const hotUpdate = configManager.get('hotUpdate') || {};
+      return res.json({
+        ...protocolMeta({
+          hashAlgorithms: assetServer.hashAlgorithms(),
+          // 配置里声明的渠道，供客户端校验自己传的 channel 是否被认识
+          channels: hotUpdate.channels || [],
+          defaultChannel: hotUpdate.defaultChannel || 'default',
+        }),
+        ...negotiate(req.query.protocol),
+        serverVersion: require('../../package.json').version,
+        assetRoot: assetServer.root(),
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  /**
+   * @openapi
    * /api/manifest:
    *   get:
    *     tags: [热更接口]
@@ -322,10 +400,13 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
    *     parameters:
    *       - { in: query, name: platform, required: true, schema: { type: string } }
    *       - { in: query, name: track, schema: { type: string, enum: [resource, code] }, description: 取哪条轨道，默认 resource。code 需要平台在 manifest.json 里配了 code 块 }
+   *       - { in: query, name: expectId, schema: { type: string }, description: 期望的 manifestId。对不上返回 409，用于消除与 /api/version 之间的竞态 }
+   *       - { in: query, name: expectVersion, schema: { type: string }, description: 期望的版本号，比 expectId 宽松，客户端实现更简单 }
    *     responses:
    *       200: { description: 清单 }
    *       400: { description: 缺少 platform }
    *       404: { description: 平台不存在，或该平台没有代码热更轨道 }
+   *       409: { description: 清单已变（expectId / expectVersion 对不上） }
    */
   router.get('/manifest', async (req, res, next) => {
     const platform = requirePlatform(req, res);
@@ -337,6 +418,9 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
         return res.status(404).json({ error: `平台不存在或没有资源目录：${platform}` });
       }
 
+      // 竞态校验放在取轨道之前：身份不对的话，无论是资源还是代码轨道都不该给。
+      if (!checkManifestPin(manifest, req.query, res)) return undefined;
+
       const track = String(req.query.track || 'resource').toLowerCase();
       if (track === 'code') {
         if (!manifest.code) {
@@ -346,15 +430,21 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
         }
         const { files, ...code } = manifest.code;
         return res.json({
+          ...protocolMeta({ hashAlgorithms: manifest.hashAlgorithms }),
           ...code,
           track: 'code',
+          manifestId: manifest.manifestId,
           generatedAt: manifest.generatedAt,
           files,
         });
       }
 
       // 资源轨道：只带代码轨道的摘要，不重复整份文件列表
-      return res.json({ ...withCodeSummary(manifest), track: 'resource' });
+      return res.json({
+        ...protocolMeta({ hashAlgorithms: manifest.hashAlgorithms }),
+        ...withCodeSummary(manifest),
+        track: 'resource',
+      });
     } catch (err) {
       return next(err);
     }

@@ -59,6 +59,17 @@ class AssetServer {
     this.configManager = configManager;
     /** @type {Map<string, {at:number, data:object}>} */
     this.manifestCache = new Map();
+    /**
+     * 内容摘要 ETag 的缓存。
+     *
+     * 算内容摘要要读整个文件，不能每个请求都算一遍。用「大小 + 修改时间」
+     * 作为失效依据：文件一变，这两个至少变一个，于是重算。
+     * （毫秒级 mtime + 字节数同时撞车的概率可以忽略；真要较真可以换成
+     *  监控文件系统事件，但对这个工具是过度设计。）
+     *
+     * @type {Map<string, {key:string, hashes:Record<string,string>}>}
+     */
+    this.hashCache = new Map();
   }
 
   /** 资产根目录的绝对路径。 */
@@ -167,10 +178,43 @@ class AssetServer {
   }
 
   /**
+   * 配置要求的摘要算法列表。
+   *
+   * 第一个是"主算法"：清单里的 `hash` 字段和资产的 ETag 都用它，
+   * 保证两者是同一个值（这是客户端能本地决策的前提）。
+   */
+  hashAlgorithms() {
+    const raw = this.configManager.get('hotUpdate.hashAlgorithms');
+    const list = (Array.isArray(raw) ? raw : [raw])
+      .map((a) => String(a || '').toLowerCase())
+      .filter((a) => crypto.getHashes().includes(a));
+    return list.length ? list : ['md5'];
+  }
+
+  /**
+   * 取某个文件的摘要，带缓存。
+   * @param {string} filePath
+   * @param {import('fs').Stats} stat
+   * @returns {Promise<Record<string,string>|null>}
+   */
+  async hashesFor(filePath, stat) {
+    const key = `${stat.size}-${Math.floor(stat.mtimeMs)}`;
+    const cached = this.hashCache.get(filePath);
+    if (cached && cached.key === key) return cached.hashes;
+
+    const hashes = await AssetServer.hashFile(filePath, this.hashAlgorithms());
+    if (!hashes) return null;
+    this.hashCache.set(filePath, { key, hashes });
+    return hashes;
+  }
+
+  /**
    * 处理 /assets/{platform}/{subPath} 请求。
    * app.js 会把 URL 拆分后塞进 req.params.platform / req.params.subPath。
+   *
+   * 是 async 的：内容摘要型 ETag 需要读文件（有缓存，但首次要算）。
    */
-  handle(req, res) {
+  async handle(req, res) {
     const platform = req.params.platform;
     const subPath = req.params.subPath;
 
@@ -184,7 +228,15 @@ class AssetServer {
     const { filePath, stat } = resolved;
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    const etag = AssetServer.etagFor(stat);
+
+    // ETag = 内容摘要，和清单里的 hash 是同一个值。
+    // 算不出来（文件读不了）就退回到「大小 + 修改时间」的弱 ETag，
+    // 至少缓存还能工作，不至于因为算不了摘要就让整个下载失败。
+    const hashes = await this.hashesFor(filePath, stat);
+    const primary = hashes ? hashes[this.hashAlgorithms()[0]] : null;
+    const etag = primary
+      ? AssetServer.etagForHash(primary)
+      : AssetServer.weakEtagFor(stat);
     const lastModified = stat.mtime.toUTCString();
 
     // ── 协商缓存 ──
@@ -439,18 +491,36 @@ class AssetServer {
     // 代码热更轨道（可选）。要先于资源清单算出来：它的文件必须从资源清单里排除。
     const code = await this._buildCodeTrack(platform, platformDir, meta.code);
 
+    // 主算法：清单里的 hash 和资产的 ETag 都用它，所以两者是同一个值。
+    const algos = this.hashAlgorithms();
+    const primary = algos[0];
+
     let files;
     if (Array.isArray(meta.files) && meta.files.length) {
-      files = meta.files.map((f) => ({
-        path: String(f.path || '').replace(/\\/g, '/'),
-        size: Number(f.size) || 0,
-        hash: f.hash || f.md5 || null,
-        url: f.url || `/assets/${encodeURIComponent(platform)}/${String(f.path || '').replace(/\\/g, '/')}`,
-      }));
+      // 自定义清单：hash 由使用方声明，服务器不校验它和文件内容是否一致。
+      // 注意这会让 ETag（服务器按内容算的）和这里的 hash 可能对不上 ——
+      // 那是使用方自己的选择，不是 bug。
+      files = meta.files.map((f) => {
+        const declared = f.hash || f.md5 || null;
+        return {
+          path: String(f.path || '').replace(/\\/g, '/'),
+          size: Number(f.size) || 0,
+          hash: declared,
+          hashAlgo: declared ? (f.hashAlgo || 'md5') : null,
+          hashes: declared ? { [f.hashAlgo || 'md5']: declared } : {},
+          url: f.url || `/assets/${encodeURIComponent(platform)}/${String(f.path || '').replace(/\\/g, '/')}`,
+        };
+      });
     } else {
-      files = await AssetServer.scanDirectory(platformDir);
-      files = files.map((f) => ({
-        ...f,
+      const scanned = await AssetServer.scanDirectory(platformDir, platformDir, 4, algos);
+      files = scanned.map((f) => ({
+        path: f.path,
+        size: f.size,
+        // 向后兼容：hash 仍是裸字符串，老客户端照旧能读
+        hash: f.hashes[primary] || null,
+        // 新增：说明 hash 用的是什么算法；多算法时 hashes 里全都有
+        hashAlgo: primary,
+        hashes: f.hashes,
         url: `/assets/${encodeURIComponent(platform)}/${f.path.split('/').map(encodeURIComponent).join('/')}`,
       }));
       // manifest.json 自己不该出现在下载清单里
@@ -472,11 +542,15 @@ class AssetServer {
       forceUpdate: Boolean(meta.forceUpdate),
       notice: meta.notice || '',
       channel: meta.channel || null,
+      hashAlgorithms: algos,
       fileCount: files.length,
       totalSize,
       generatedAt: new Date().toISOString(),
       files,
     };
+    // 清单身份：内容变了它就变，用来固定版本、消除竞态。
+    // 放在 files 之后算，因为它要覆盖文件列表本身。
+    manifest.manifestId = AssetServer.manifestIdFor(manifest);
     if (code) manifest.code = code;
     if (meta._warning) manifest.warning = meta._warning;
     return manifest;
@@ -512,26 +586,36 @@ class AssetServer {
       .replace(/\\/g, '/')
       .replace(/^\/+|\/+$/g, '') || 'dll';
 
+    const algos = this.hashAlgorithms();
+    const primary = algos[0];
+
+    /** 把扫描结果铺成统一的条目形状（和资源轨道一致）。 */
+    const shape = (pathStr, size, hashes) => ({
+      path: pathStr,
+      size,
+      hash: hashes[primary] || null,
+      hashAlgo: primary,
+      hashes,
+      url: `/assets/${encodeURIComponent(platform)}/${pathStr.split('/').map(encodeURIComponent).join('/')}`,
+    });
+
     let files;
     if (Array.isArray(raw.files) && raw.files.length) {
       files = raw.files.map((f) => {
         const p = String(f.path || '').replace(/\\/g, '/');
-        return {
-          path: p,
-          size: Number(f.size) || 0,
-          hash: f.hash || f.md5 || null,
-          url: f.url || `/assets/${encodeURIComponent(platform)}/${p.split('/').map(encodeURIComponent).join('/')}`,
-        };
+        const declared = f.hash || f.md5 || null;
+        const algo = f.hashAlgo || 'md5';
+        const item = shape(p, Number(f.size) || 0, declared ? { [algo]: declared } : {});
+        // 自定义清单允许直接给 url
+        if (f.url) item.url = f.url;
+        return item;
       });
     } else {
       const codeDir = this.safeResolve(platformDir, dir);
       if (!codeDir || !fs.existsSync(codeDir)) return null;
       // 第二个参数是 base：让 path 带上 "dll/" 前缀，URL 才对得上
-      files = await AssetServer.scanDirectory(codeDir, platformDir);
-      files = files.map((f) => ({
-        ...f,
-        url: `/assets/${encodeURIComponent(platform)}/${f.path.split('/').map(encodeURIComponent).join('/')}`,
-      }));
+      const scanned = await AssetServer.scanDirectory(codeDir, platformDir, 4, algos);
+      files = scanned.map((f) => shape(f.path, f.size, f.hashes));
     }
 
     if (!files.length) return null;
@@ -539,6 +623,7 @@ class AssetServer {
     return {
       platform,
       dir,
+      hashAlgorithms: algos,
       // 没写版本就按内容推导，和资源轨道同一套逻辑
       version: raw.version || AssetServer.deriveVersion(files),
       // 主包版本低于它就不能热更代码（AOT 元数据对不上）
@@ -565,7 +650,7 @@ class AssetServer {
    * 用并发上限而不是 Promise.all 全放出去：一个平台目录下可能有上万个文件，
    * 同时打开上万个读流会把文件句柄耗尽。
    */
-  static async scanDirectory(dir, base = dir, concurrency = 4) {
+  static async scanDirectory(dir, base = dir, concurrency = 4, algos = ['md5']) {
     const out = [];
 
     const walk = async (current) => {
@@ -593,7 +678,8 @@ class AssetServer {
             return {
               path: path.relative(base, full).split(path.sep).join('/'),
               size: stat.size,
-              hash: await AssetServer.md5File(full),
+              // 一次读盘算全部算法，所以多算法不额外增加 I/O
+              hashes: (await AssetServer.hashFile(full, algos)) || {},
             };
           } catch {
             // 单个文件读不了就跳过，不让整个 manifest 挂掉
@@ -613,12 +699,26 @@ class AssetServer {
   }
 
   /**
-   * 流式计算文件 md5。
-   * 绝不 readFileSync —— 那会把整个文件读进内存，并同步阻塞事件循环。
+   * 流式计算文件的摘要，**一次读取可以同时算多个算法**。
+   *
+   * 为什么支持多算法：真实热更服务端会声明用的是什么（`{algo, value}`），
+   * 让客户端有选择余地。多算一个摘要只是多 update 一次，I/O 成本不变 ——
+   * 真正的开销在读文件，不在摘要计算。
+   *
+   * 绝不 readFileSync：那会把整个文件读进内存，并同步阻塞事件循环。
+   *
+   * @param {string} filePath
+   * @param {string[]} algos 例如 ['md5'] 或 ['md5','sha256']
+   * @returns {Promise<Record<string,string>|null>} 算法名 → 十六进制摘要
    */
-  static md5File(filePath) {
+  static hashFile(filePath, algos = ['md5']) {
+    const list = (Array.isArray(algos) ? algos : [algos])
+      .map((a) => String(a).toLowerCase())
+      .filter((a) => crypto.getHashes().includes(a));
+    if (!list.length) list.push('md5');
+
     return new Promise((resolve) => {
-      const hash = crypto.createHash('md5');
+      const digests = list.map((algo) => ({ algo, hash: crypto.createHash(algo) }));
       let stream;
       try {
         stream = fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 });
@@ -626,10 +726,77 @@ class AssetServer {
         resolve(null);
         return;
       }
-      stream.on('data', (chunk) => hash.update(chunk));
+      stream.on('data', (chunk) => {
+        for (const d of digests) d.hash.update(chunk);
+      });
       stream.on('error', () => resolve(null));
-      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('end', () => {
+        const out = {};
+        for (const d of digests) out[d.algo] = d.hash.digest('hex');
+        resolve(out);
+      });
     });
+  }
+
+  /** 兼容旧调用点：只算 md5，返回裸字符串。 */
+  static async md5File(filePath) {
+    const hashes = await AssetServer.hashFile(filePath, ['md5']);
+    return hashes ? hashes.md5 : null;
+  }
+
+  /**
+   * 生成内容摘要型 ETag。
+   *
+   * 为什么不用「大小 + 修改时间」那种弱 ETag：
+   *   清单里已经给了每个文件的内容 hash，如果 ETag 是另一套东西，客户端
+   *   就没法把两者对上 —— 它手里明明有 hash，却还得再发一次条件请求去问
+   *   "服务器上那个文件还是我这份吗"。
+   *   让 ETag **就是**内容 hash 之后，客户端看清单即可本地决策，零请求。
+   *
+   * 强 ETag（不带 W/ 前缀）：同一个 hash 一定对应同一份字节内容。
+   */
+  static etagForHash(hexHash) {
+    return `"${hexHash}"`;
+  }
+
+  /**
+   * 退化用的弱 ETag：大小 + 修改时间。
+   * 只在算不出内容摘要时使用（文件读不了），保证缓存仍能工作。
+   */
+  static weakEtagFor(stat) {
+    return `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  }
+
+  /**
+   * 清单身份：内容一变它就变，内容不变它就稳定。
+   *
+   * 用途是**消除竞态**。客户端典型流程是两步：
+   *   1. GET /api/version      → 得知要更新到 1.2.0
+   *   2. GET /api/manifest     → 取文件列表
+   * 如果第 1 步和第 2 步之间有人在面板上换了配置，客户端会拿到 1.3.0 的文件列表，
+   * 却以为自己在做 1.2.0 的更新 —— 下到一半的包和预期不符，而且**不报错**。
+   *
+   * 带上 manifestId 之后，客户端可以在第 2 步回传它；对不上服务端返回 409，
+   * 客户端重新走一遍即可。这比"下完发现不对"便宜得多。
+   *
+   * 注意：这个值刻意**不包含 generatedAt**，否则每次重扫都会变，
+   * 就失去了"内容相同则身份相同"的意义。
+   */
+  static manifestIdFor(manifest) {
+    const hash = crypto.createHash('md5');
+    hash.update(`v1|${manifest.platform}|${manifest.version}|${manifest.minVersion || ''}`);
+    hash.update(`|${manifest.forceUpdate ? 1 : 0}|${manifest.channel || ''}|`);
+    if (manifest.code) {
+      hash.update(`code:${manifest.code.version}:${manifest.code.minAppVersion || ''}:`);
+    }
+    for (const f of [...(manifest.files || [])].sort((a, b) => a.path.localeCompare(b.path))) {
+      hash.update(`${f.path}:${f.size}:${f.hash || ''};`);
+    }
+    for (const f of [...((manifest.code && manifest.code.files) || [])]
+      .sort((a, b) => a.path.localeCompare(b.path))) {
+      hash.update(`c:${f.path}:${f.size}:${f.hash || ''};`);
+    }
+    return hash.digest('hex').slice(0, 16);
   }
 
   /**

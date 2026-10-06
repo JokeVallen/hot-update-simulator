@@ -24,6 +24,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 const { execFileSync } = require('child_process');
 const express = require('express');
 // 不能用 fs.rmSync 删目录：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
@@ -1069,6 +1070,173 @@ async function testAssetEdgeCases() {
         entry ? `资源 ${entry.version} / 代码 ${entry.codeVersion}` : '没找到该平台');
     } finally {
       await removeDir(codePlatformDir);
+      app.locals.assetServer.invalidateManifest();
+    }
+
+    // ---------------- 协议版本、能力位与内容摘要 ----------------
+    //
+    // 这一组对应协议 1.1.0 引入的改动。每一条都针对一种"客户端会静默误判"
+    // 的情况 —— 不报错，但行为不对，而这类问题恰恰是模拟器最该帮人发现的。
+    section('协议协商与内容摘要');
+
+    const proto = JSON.parse((await request(port, '/api/protocol')).body.toString());
+    check('协议版本号存在且是正整数',
+      Number.isInteger(proto.protocolVersion) && proto.protocolVersion >= 1,
+      `protocolVersion=${proto.protocolVersion}`);
+    check('能力位是非空字符串数组',
+      Array.isArray(proto.capabilities) && proto.capabilities.length > 0
+        && proto.capabilities.every((c) => typeof c === 'string'),
+      `${proto.capabilities.length} 项`);
+    check('/api/protocol 不需要 platform（客户端还不知道平台时就能问）',
+      proto.protocolVersion > 0 && proto.assetRoot !== undefined);
+    check('声明了支持的摘要算法',
+      Array.isArray(proto.hashAlgorithms) && proto.hashAlgorithms.length > 0,
+      JSON.stringify(proto.hashAlgorithms));
+
+    const pv = JSON.parse(
+      (await request(port, '/api/version?platform=Android&current=1.0.0')).body.toString(),
+    );
+    check('/api/version 也带协议元信息（客户端不必额外发一次请求）',
+      pv.protocolVersion === proto.protocolVersion && Array.isArray(pv.capabilities),
+      `protocolVersion=${pv.protocolVersion}`);
+
+    const tooNew = JSON.parse(
+      (await request(port, '/api/version?platform=Android&protocol=99')).body.toString(),
+    );
+    check('客户端声明更高的协议版本时如实告知不兼容（而不是假装支持）',
+      tooNew.protocolCompatible === false && Boolean(tooNew.protocolNotice),
+      `compatible=${tooNew.protocolCompatible}`);
+
+    const sameProto = JSON.parse(
+      (await request(port, `/api/version?platform=Android&protocol=${proto.protocolVersion}`)).body.toString(),
+    );
+    check('客户端声明相同协议版本时判定兼容',
+      sameProto.protocolCompatible === true, `compatible=${sameProto.protocolCompatible}`);
+
+    // ---- 摘要算法与 ETag 必须是同一个值 ----
+    //
+    // 这是客户端能"看清单就免掉下载"的前提：如果 ETag 是另一套东西，
+    // 客户端手里明明有 hash，却还得再发一次条件请求去问。
+    const withHashes = JSON.parse(
+      (await request(port, '/api/manifest?platform=Android')).body.toString(),
+    );
+    const entry = withHashes.files[0];
+    check('清单条目给出算法名（hashAlgo）与多算法摘要（hashes）',
+      typeof entry.hashAlgo === 'string'
+        && entry.hashes && typeof entry.hashes[entry.hashAlgo] === 'string',
+      `hashAlgo=${entry.hashAlgo}, hashes=${JSON.stringify(Object.keys(entry.hashes || {}))}`);
+    check('hash 仍是裸字符串（老客户端不受影响）',
+      typeof entry.hash === 'string' && entry.hash.length > 0, `type=${typeof entry.hash}`);
+
+    const assetRes = await request(port, entry.url);
+    check('资产响应的 ETag 就是清单里的 hash（客户端可据此本地决策）',
+      assetRes.headers.etag === `"${entry.hash}"`,
+      `ETag=${assetRes.headers.etag} vs hash=${entry.hash}`);
+    check('ETag 是强验证器（不带 W/ 前缀，同一 hash 必是同一份字节）',
+      String(assetRes.headers.etag).startsWith('"'), assetRes.headers.etag);
+
+    const byHash = await request(port, entry.url, {
+      headers: { 'If-None-Match': `"${entry.hash}"` },
+    });
+    check('拿清单里的 hash 直接做条件请求会拿到 304（免掉一次下载）',
+      byHash.status === 304, `状态 ${byHash.status}`);
+
+    // ---- 清单版本固定 ----
+    check('清单带 manifestId',
+      typeof withHashes.manifestId === 'string' && withHashes.manifestId.length > 0,
+      withHashes.manifestId);
+
+    const sameId = await request(port,
+      `/api/manifest?platform=Android&expectId=${withHashes.manifestId}`);
+    check('expectId 正确时正常返回',
+      sameId.status === 200, `状态 ${sameId.status}`);
+
+    const staleId = await request(port, '/api/manifest?platform=Android&expectId=stale0000');
+    check('expectId 对不上时返回 409（拦住"取版本和取清单之间被改了配置"）',
+      staleId.status === 409, `状态 ${staleId.status}`);
+    const staleBody = JSON.parse(staleId.body.toString());
+    check('409 里带回当前真实身份，客户端可直接重来',
+      staleBody.actual && staleBody.actual.manifestId === withHashes.manifestId,
+      `actual=${staleBody.actual && staleBody.actual.manifestId}`);
+
+    const staleVer = await request(port, '/api/manifest?platform=Android&expectVersion=9.9.9');
+    check('expectVersion 对不上时同样返回 409（客户端实现更简单的那种）',
+      staleVer.status === 409, `状态 ${staleVer.status}`);
+
+    // manifestId 必须稳定：内容没变就不能变，否则客户端每次都会拿到 409，
+    // 等于把固定版本这个功能废掉。
+    const againManifest = JSON.parse(
+      (await request(port, '/api/manifest?platform=Android')).body.toString(),
+    );
+    check('同样的内容得到同样的 manifestId（否则固定版本会永远失败）',
+      againManifest.manifestId === withHashes.manifestId,
+      `${withHashes.manifestId} vs ${againManifest.manifestId}`);
+
+    // ---- gzip：要求"不得比未压缩更大"，而不是"必须压缩" ----
+    //
+    // 小响应压完反而更大是常态（实测 3 个文件的清单：1357 → 1385 字节），
+    // 所以正确行为是压完比一次大小、取小的那个。
+    const noGzip = await request(port, '/api/manifest?platform=Android');
+    check('未要求 gzip 时不压缩', !noGzip.headers['content-encoding'],
+      `encoding=${noGzip.headers['content-encoding']}`);
+    check('JSON 响应声明 Vary: Accept-Encoding（否则中间缓存会发错版本）',
+      String(noGzip.headers.vary || '').includes('Accept-Encoding'),
+      String(noGzip.headers.vary));
+
+    const gzManifest = await request(port, '/api/manifest?platform=Android', {
+      headers: { 'Accept-Encoding': 'gzip' },
+    });
+    check('压缩后的响应绝不会比未压缩更大（小清单必须退回原样）',
+      gzManifest.body.length <= noGzip.body.length,
+      `gzip ${gzManifest.body.length} vs 原样 ${noGzip.body.length} 字节`);
+    if (gzManifest.headers['content-encoding'] === 'gzip') {
+      check('声明了 gzip 就必须真的压缩过（Content-Length 与实际字节数一致）',
+        Number(gzManifest.headers['content-length']) === gzManifest.body.length,
+        `header=${gzManifest.headers['content-length']} 实际=${gzManifest.body.length}`);
+    }
+
+    // ---- 大清单必须真的被压小 ----
+    //
+    // 上面那条只保证"不变大"。gzip 的真正价值在文件多的时候：实测每个文件条目
+    // 约 300 字节，1000 个文件就是 295 KB。这里建 300 个极小的文件来验证
+    // 压缩确实生效 —— 否则"加了 gzip"就只是说说。
+    const bulkPlatform = 'GzipBulkProbe';
+    const bulkDir = path.join(ASSETS_ROOT, bulkPlatform);
+    try {
+      fs.mkdirSync(path.join(bulkDir, 'bundles'), { recursive: true });
+      for (let i = 0; i < 300; i += 1) {
+        fs.writeFileSync(
+          path.join(bulkDir, 'bundles', `f${String(i).padStart(4, '0')}_bundle.ab`),
+          Buffer.alloc(64, i % 251),
+        );
+      }
+      app.locals.assetServer.invalidateManifest();
+
+      const plain = await request(port, `/api/manifest?platform=${bulkPlatform}`, {
+        headers: { 'Accept-Encoding': 'identity' },
+      });
+      const zipped = await request(port, `/api/manifest?platform=${bulkPlatform}`, {
+        headers: { 'Accept-Encoding': 'gzip' },
+      });
+
+      check(`大清单（300 个文件）确实被 gzip 压小了`,
+        zipped.headers['content-encoding'] === 'gzip' && zipped.body.length < plain.body.length * 0.5,
+        `原样 ${plain.body.length} 字节 → gzip ${zipped.body.length} 字节`
+          + `（${(plain.body.length / Math.max(zipped.body.length, 1)).toFixed(1)}x）`);
+
+      // 压完必须还能正常解析，且内容和未压缩版一致。
+      // 注意要**先解压**：测试用的 request() 走裸 http，不会自动解 Content-Encoding，
+      // 直接把 gzip 字节 toString() 会得到乱码。
+      const unzip = (res) => (res.headers['content-encoding'] === 'gzip'
+        ? zlib.gunzipSync(res.body).toString()
+        : res.body.toString());
+      const parsed = JSON.parse(unzip(zipped));
+      check('压缩后的清单内容与未压缩版一致（不是压坏了）',
+        parsed.fileCount === 300 && parsed.manifestId
+          === JSON.parse(plain.body.toString()).manifestId,
+        `fileCount=${parsed.fileCount}`);
+    } finally {
+      await removeDir(bulkDir);
       app.locals.assetServer.invalidateManifest();
     }
 

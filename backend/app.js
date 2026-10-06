@@ -26,6 +26,8 @@ const swaggerJsdoc = require('swagger-jsdoc');
 // .env 由 core/paths 统一加载，这里只需要保证它**最先**被 require，
 // 环境变量才会在后面的模块读 process.env 之前就位。
 // 不要在这里再加载一次 dotenv：两处加载会变成"谁先谁后"的隐式依赖。
+const jsonGzip = require('./middleware/jsonGzip');
+// 副作用引入：core/paths 负责加载 .env，必须最先执行
 require('./core/paths');
 
 const ConfigManager = require('./core/configManager');
@@ -175,6 +177,9 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '2mb' }));
+// JSON 响应的 gzip。只包 res.json，所以不影响资产下载（那些带内容摘要型 ETag，
+// 压缩会让"同一 URL 两种表示"破坏强 ETag 的语义）。
+app.use(jsonGzip);
 app.use(loggerMiddleware(logger));
 
 // ------------------------------------------------- 控制类路由（不受模拟影响）
@@ -206,7 +211,7 @@ app.use('/api', simulationPipeline, createApiRouter({ configManager, assetServer
 // 资产下载：把 URL 拆成 { 平台, 剩余路径 } 再交给 AssetServer。
 // 这里手动解析而不是用通配路由，是为了避开不同 Express 版本
 // 通配符语法（*、*name、{*name}）的差异。
-app.use('/assets', simulationPipeline, (req, res) => {
+app.use('/assets', simulationPipeline, async (req, res, next) => {
   const parts = req.path.split('/').filter(Boolean);
   if (!parts.length) {
     return res.status(400).type('text/plain; charset=utf-8')
@@ -227,7 +232,13 @@ app.use('/assets', simulationPipeline, (req, res) => {
 
   req.params.platform = platform;
   req.params.subPath = subPath;
-  return assetServer.handle(req, res);
+  // handle 是 async 的：内容摘要型 ETag 首次要读文件算摘要（之后有缓存）。
+  // 必须把异常交给 next，否则读盘失败会变成未处理的 Promise 拒绝。
+  try {
+    return await assetServer.handle(req, res);
+  } catch (err) {
+    return next(err);
+  }
 });
 
 // ---------------------------------------------------------- 文档与目录浏览

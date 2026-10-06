@@ -261,6 +261,116 @@ curl "http://localhost:5500/api/version?platform=Android&current=1.5.0&codeCurre
 
 ---
 
+## 协议版本与能力协商
+
+客户端是你自己写的 Unity 代码，而服务端会持续演进。没有版本协商时，服务端加个字段、
+改个语义，老客户端**不会报错**，只会静默误判——而"静默误判"恰恰是这个模拟器
+最该帮你发现的东西。
+
+所以每个热更接口的响应里都带：
+
+```jsonc
+{
+  "protocolVersion": 1,
+  "capabilities": [
+    "codeTrack",          // 支持代码热更轨道
+    "rangeResume",        // 资产支持 Range 断点续传
+    "conditionalCache",   // 支持 ETag 条件请求（304）
+    "hashMatchesEtag",    // ETag 与清单 hash 是同一个值（见下）
+    "manifestPinning",    // 清单可固定版本，用于消除竞态
+    "grayByDeviceId",     // 灰度支持 deviceId 百分比
+    "multiAlgorithmHash", // 清单同时给出算法名与多算法摘要
+    "gzip"                // JSON 响应可能被 gzip
+  ]
+}
+```
+
+`GET /api/protocol` 不需要任何参数，客户端在还不知道平台时就能先问一次。
+
+### 客户端应该怎么做
+
+```csharp
+// 1. 启动时问一次协议
+var probe = await GetJson($"{BaseUrl}/api/protocol");
+int proto = probe.protocolVersion;
+bool hasCode = probe.capabilities.Contains("codeTrack");
+
+// 2. 按**能力**分支，而不是按版本号
+//    版本号只能表达"新旧"，能力位能表达"支不支持这一件事"
+if (!hasCode) { /* 走不含代码热更的降级分支 */ }
+```
+
+服务端也能接收客户端声明的版本：`?protocol=2`。如果客户端比服务端新，
+响应里会带 `protocolCompatible: false` 和一句 `protocolNotice`——**服务端没法
+用更新格式回应**（它只会说自己这套），这个字段的价值是让客户端知道
+"该不该相信我接下来发的东西"。
+
+### ETag 就是内容 hash
+
+资产的响应头 `ETag` **就是清单里那个 hash**：
+
+```
+清单里：  "hash": "58435bb4…"
+响应头：  ETag: "58435bb4…"
+```
+
+这不是巧合，是刻意的。**好处是客户端可以完全免掉一次请求**：
+
+```
+客户端已有文件 X，本地记录的 hash 是 H
+新清单说 X 的 hash 还是 H
+→ 直接跳过下载，一个请求都不用发
+```
+
+如果 ETag 是另一套东西（比如"大小 + 修改时间"），客户端手里明明有 hash，
+却还得再发一次条件请求去问"服务器上那份还是我这份吗"。
+
+想用条件请求也可以——拿清单里的 hash 当 `If-None-Match` 发过去，没变就是 `304`。
+
+摘要算法可以在 `hotUpdate.hashAlgorithms` 里配（默认 `md5`）：
+
+```jsonc
+{ "hotUpdate": { "hashAlgorithms": ["md5"] } }
+```
+
+配多个（如 `["sha256","md5"]`）时，**第一个是主算法**——清单的 `hash` 字段和
+ETag 都用它；`hashes` 里会给出全部算法的摘要。多算一个摘要不会增加 I/O，
+文件只读一遍。清单条目里同时给出 `hashAlgo` 说明 `hash` 用的是什么。
+
+### 清单身份：消除竞态
+
+热更的典型流程是**两步**：
+
+```
+1. GET /api/version    → 得知要更新到 1.2.0
+2. GET /api/manifest   → 取文件列表
+```
+
+如果这两步之间有人在面板上换了配置（或者你刚好在改 `manifest.json`），
+客户端会拿到 **1.3.0 的文件列表**，却以为自己在做 1.2.0 的更新——
+下到一半发现对不上，而且**不报错**。
+
+在真实项目里这个竞态很难触发，**在这里却很容易**——你就是在不停地改配置。
+
+所以清单带一个 `manifestId`（内容变了它就变，内容不变它稳定），
+客户端在第 2 步把它带回来：
+
+```bash
+# 推荐：精确匹配
+curl "http://localhost:5500/api/manifest?platform=Android&expectId=8b030cd618bf7f9d"
+
+# 或者只比版本号，客户端实现更简单
+curl "http://localhost:5500/api/manifest?platform=Android&expectVersion=1.2.0"
+```
+
+对不上就返回 **409**，并在响应里带上当前的真实身份，客户端直接重来即可。
+这比"下完发现不对"便宜得多。
+
+> 更省事的做法：直接用 `GET /api/check`——它**一次返回版本判断和清单**，
+> 结构上就不存在这个竞态。
+
+---
+
 ## 两种"坏"的分工
 
 这个分法很重要，调参时别搞混：
@@ -508,8 +618,9 @@ public class HotUpdateClient : MonoBehaviour
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/protocol` | 协议版本与能力声明。不需要参数，客户端启动时先问这个 |
 | GET | `/api/version` | 查版本、判断是否要更新。参数 `platform`、`current`、`channel`、`deviceId`，代码热更再加 `codeCurrent`、`appVersion`、`aotHash` |
-| GET | `/api/manifest` | 拿完整文件清单（路径/大小/md5/下载地址）。`?track=code` 取代码轨道 |
+| GET | `/api/manifest` | 拿完整文件清单（路径/大小/md5/下载地址）。`?track=code` 取代码轨道；`?expectId=` / `?expectVersion=` 固定版本，对不上返回 409 |
 | GET | `/api/check` | 一步拿到上面两个结果，省一次往返 |
 | GET | `/api/platforms` | 列出所有平台及其资源版本与代码版本 |
 | GET | `/api/health` | 健康检查 |
@@ -585,6 +696,7 @@ curl http://localhost:5500/api/system
   "hotUpdate": {
     "defaultChannel": "default",
     "channels": ["default", "beta", "dev"],
+    "hashAlgorithms": ["md5"],   // 文件摘要算法，第一个是主算法（清单 hash 与 ETag 都用它）
     "gray": { "enabled": false, "percent": 0 }   // 灰度发布百分比
   },
   "logging": {

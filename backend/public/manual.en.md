@@ -268,6 +268,116 @@ To be clear, this is **protocol-level** support, not a complete code hot-update 
 
 ---
 
+## Protocol Version and Capability Negotiation
+
+The client is your own Unity code, while the server keeps evolving. Without negotiation, adding a
+field or changing a meaning on the server **does not produce an error** in an old client — it just
+makes it misjudge silently. And silent misjudgement is exactly what this simulator exists to expose.
+
+So every hot-update response carries:
+
+```jsonc
+{
+  "protocolVersion": 1,
+  "capabilities": [
+    "codeTrack",          // code hot-update track is available
+    "rangeResume",        // assets support Range resume
+    "conditionalCache",   // ETag conditional requests (304) are supported
+    "hashMatchesEtag",    // the ETag is the manifest hash (see below)
+    "manifestPinning",    // manifests can be pinned to eliminate races
+    "grayByDeviceId",     // gray release by deviceId percentage
+    "multiAlgorithmHash", // entries carry the algorithm name and multiple digests
+    "gzip"                // JSON responses may be gzipped
+  ]
+}
+```
+
+`GET /api/protocol` takes no parameters, so a client can ask before it even knows the platform.
+
+### What a client should do
+
+```csharp
+// 1. Ask once at startup
+var probe = await GetJson($"{BaseUrl}/api/protocol");
+int proto = probe.protocolVersion;
+bool hasCode = probe.capabilities.Contains("codeTrack");
+
+// 2. Branch on **capabilities**, not on the version number
+//    A version number only says "older or newer"; a capability says "this one thing is supported"
+if (!hasCode) { /* take the path without code hot updates */ }
+```
+
+The server also accepts a client-declared version: `?protocol=2`. If the client is newer than the
+server, the response carries `protocolCompatible: false` plus a `protocolNotice` — the server
+**cannot** answer in a newer format (it only speaks its own), so the value of that field is telling
+the client how much to trust what follows.
+
+### The ETag is the content hash
+
+The asset `ETag` header **is the hash from the manifest**:
+
+```
+in the manifest:  "hash": "58435bb4…"
+in the response:  ETag: "58435bb4…"
+```
+
+That is deliberate, not a coincidence. **It lets a client skip a request entirely**:
+
+```
+The client already has file X, with local hash H
+The new manifest says X still has hash H
+→ skip the download; not a single request is sent
+```
+
+If the ETag were something else (say "size + mtime"), the client would be holding the hash and still
+have to send a conditional request to ask "is the file on the server still the one I have?".
+
+Conditional requests still work — send the manifest hash as `If-None-Match` and an unchanged file
+returns `304`.
+
+The digest algorithm is configurable via `hotUpdate.hashAlgorithms` (default `md5`):
+
+```jsonc
+{ "hotUpdate": { "hashAlgorithms": ["md5"] } }
+```
+
+With several algorithms (e.g. `["sha256","md5"]`), **the first is the primary one** — the manifest's
+`hash` field and the ETag both use it, and `hashes` carries every algorithm's digest. Extra digests
+cost no extra I/O: the file is read once. Each entry also names its algorithm in `hashAlgo`.
+
+### Manifest identity: eliminating the race
+
+The typical hot-update flow has **two steps**:
+
+```
+1. GET /api/version    → learn that you should update to 1.2.0
+2. GET /api/manifest   → fetch the file list
+```
+
+If someone changes the configuration between those two steps (or you happen to be editing
+`manifest.json`), the client receives the **1.3.0 file list** while believing it is performing the
+1.2.0 update — it discovers the mismatch halfway through, and **nothing reports an error**.
+
+In a real project that race is hard to hit; **here it is easy**, because you are changing settings
+constantly. So the manifest carries a `manifestId` (it changes when the content changes, and stays
+stable otherwise) and the client echoes it back on step 2:
+
+```bash
+# Preferred: exact match
+curl "http://localhost:5500/api/manifest?platform=Android&expectId=8b030cd618bf7f9d"
+
+# Or match the version only — simpler to implement in a client
+curl "http://localhost:5500/api/manifest?platform=Android&expectVersion=1.2.0"
+```
+
+A mismatch returns **409** along with the current identity, so the client can simply start over.
+Much cheaper than discovering it after a partial download.
+
+> Simpler still: use `GET /api/check`, which returns the version decision and the manifest **in one
+> response** — that flow has no race by construction.
+
+---
+
 ## Two Kinds of "Bad": Who Handles What
 
 This split matters — don't mix the two up while tuning:
@@ -518,8 +628,9 @@ public class HotUpdateClient : MonoBehaviour
 
 | Method | Path | Description |
 |---|---|---|
+| GET | `/api/protocol` | Protocol version and capabilities. No parameters — ask this first at startup |
 | GET | `/api/version` | Check the version and decide whether an update is needed. Parameters `platform`, `current`, `channel`, `deviceId`; for code hot updates also `codeCurrent`, `appVersion`, `aotHash` |
-| GET | `/api/manifest` | Fetch the full file manifest (path / size / md5 / download URL). `?track=code` fetches the code track |
+| GET | `/api/manifest` | Fetch the full file manifest (path / size / md5 / download URL). `?track=code` for the code track; `?expectId=` / `?expectVersion=` pins the version and returns 409 on a mismatch |
 | GET | `/api/check` | Both of the above in one call, saving a round trip |
 | GET | `/api/platforms` | List every platform with its resource version and code version |
 | GET | `/api/health` | Health check |
@@ -595,6 +706,7 @@ curl http://localhost:5500/api/system
   "hotUpdate": {
     "defaultChannel": "default",
     "channels": ["default", "beta", "dev"],
+    "hashAlgorithms": ["md5"],   // Digest algorithms; the first is primary (manifest hash and ETag both use it)
     "gray": { "enabled": false, "percent": 0 }   // Gray release percentage
   },
   "logging": {

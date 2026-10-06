@@ -26,6 +26,9 @@
       "beta",
       "dev"
     ],
+    "hashAlgorithms": [
+      "md5"
+    ],
     "gray": {
       "enabled": false,
       "percent": 0
