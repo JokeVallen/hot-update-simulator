@@ -1240,6 +1240,190 @@ async function testAssetEdgeCases() {
       app.locals.assetServer.invalidateManifest();
     }
 
+    // ---------------- 渠道真正影响内容（协议 2） ----------------
+    //
+    // 之前 channel 只被回显，字段存在但不影响服务端返回什么 —— 属于"设计到一半"。
+    // 现在它决定读哪个目录，所以也决定缓存键。
+    //
+    // 这一组里最容易漏掉的是"渠道必须进缓存键"和"旧布局不能坏"：
+    // 前者漏了会串内容且不报错，后者坏了会让所有既有数据失效。
+    section('渠道内容解析');
+
+    const chanPlatform = 'ChannelLayoutProbe';
+    const chanDir = path.join(ASSETS_ROOT, chanPlatform);
+    const flatPlatform = 'FlatLayoutProbe';
+    const flatDir = path.join(ASSETS_ROOT, flatPlatform);
+    const prevHotUpdate = JSON.parse(JSON.stringify(app.locals.configManager.get('hotUpdate')));
+
+    try {
+      // 分渠道布局：两个渠道各一份内容，版本和文件名都不同
+      for (const [ch, ver, marker] of [['default', '1.0.0', 11], ['beta', '2.0.0', 22]]) {
+        fs.mkdirSync(path.join(chanDir, ch, 'bundles'), { recursive: true });
+        fs.writeFileSync(path.join(chanDir, ch, 'manifest.json'), JSON.stringify({ version: ver }));
+        fs.writeFileSync(path.join(chanDir, ch, 'bundles', `${ch}.ab`), Buffer.alloc(128, marker));
+      }
+      // 平铺布局：没有渠道子目录，整个平台目录就是默认渠道
+      fs.mkdirSync(path.join(flatDir, 'bundles'), { recursive: true });
+      fs.writeFileSync(path.join(flatDir, 'manifest.json'), JSON.stringify({ version: '9.9.9' }));
+      fs.writeFileSync(path.join(flatDir, 'bundles', 'a.ab'), Buffer.alloc(64, 7));
+      app.locals.assetServer.invalidateManifest();
+
+      const mDefault = JSON.parse(
+        (await request(port, `/api/manifest?platform=${chanPlatform}&channel=default`)).body.toString(),
+      );
+      const mBeta = JSON.parse(
+        (await request(port, `/api/manifest?platform=${chanPlatform}&channel=beta`)).body.toString(),
+      );
+
+      check('不同渠道返回不同版本与不同文件',
+        mDefault.version === '1.0.0' && mBeta.version === '2.0.0'
+          && mDefault.files[0].path === 'bundles/default.ab'
+          && mBeta.files[0].path === 'bundles/beta.ab',
+        `default=${mDefault.version}/${mDefault.files[0].path} `
+          + `beta=${mBeta.version}/${mBeta.files[0].path}`);
+      check('不同渠道的 manifestId 不同（否则固定版本会串渠道）',
+        mDefault.manifestId !== mBeta.manifestId,
+        `${mDefault.manifestId} vs ${mBeta.manifestId}`);
+      check('分渠道布局下资产 URL 带上渠道那一段',
+        mBeta.files[0].url === `/assets/${chanPlatform}/beta/bundles/beta.ab`,
+        mBeta.files[0].url);
+      check('清单如实报告实际生效的渠道与 URL 形态',
+        mBeta.channel === 'beta' && mBeta.channelInUrl === true,
+        `channel=${mBeta.channel}, channelInUrl=${mBeta.channelInUrl}`);
+
+      // 缓存必须按 (平台, 渠道) 分键。只按平台缓存的话，
+      // 连着请求两个渠道会拿到同一份内容 —— 而且完全不报错。
+      const againDefault = JSON.parse(
+        (await request(port, `/api/manifest?platform=${chanPlatform}&channel=default`)).body.toString(),
+      );
+      check('缓存按渠道分键（先请求 beta 再请求 default 不会串内容）',
+        againDefault.version === '1.0.0' && againDefault.files[0].path === 'bundles/default.ab',
+        `拿到 ${againDefault.version}/${againDefault.files[0].path}`);
+
+      const betaBytes = await request(port, mBeta.files[0].url);
+      const defaultBytes = await request(port, mDefault.files[0].url);
+      check('按渠道下载到的确实是各自的内容（字节不同）',
+        betaBytes.status === 200 && defaultBytes.status === 200
+          && betaBytes.body[0] === 22 && defaultBytes.body[0] === 11,
+        `beta[0]=${betaBytes.body[0]} default[0]=${defaultBytes.body[0]}`);
+
+      // 拼错渠道必须明确报错。静默退回默认渠道的话，
+      // "beta 用户拿到了正式内容"这种事根本查不出来。
+      const wrongChannel = await request(port, `/api/manifest?platform=${chanPlatform}&channel=nosuch`);
+      check('渠道拼错时返回 404，不静默退回默认渠道',
+        wrongChannel.status === 404, `状态 ${wrongChannel.status}`);
+      const wrongBody = JSON.parse(wrongChannel.body.toString());
+      check('404 里列出可用渠道，便于自助排查',
+        Array.isArray(wrongBody.availableChannels) && wrongBody.availableChannels.includes('beta'),
+        JSON.stringify(wrongBody.availableChannels));
+
+      // 旧的平铺布局不能坏：既有数据一行都不用迁移
+      const flatManifest = JSON.parse(
+        (await request(port, `/api/manifest?platform=${flatPlatform}`)).body.toString(),
+      );
+      check('平铺布局仍可用，整个平台目录就是默认渠道',
+        flatManifest.version === '9.9.9' && flatManifest.channelInUrl === false,
+        `version=${flatManifest.version}, channelInUrl=${flatManifest.channelInUrl}`);
+      check('平铺布局下资产 URL 不带渠道段（旧客户端手拼的 URL 仍然有效）',
+        flatManifest.files[0].url === `/assets/${flatPlatform}/bundles/a.ab`,
+        flatManifest.files[0].url);
+      const flatDl = await request(port, `/assets/${flatPlatform}/bundles/a.ab`);
+      check('平铺布局的旧 URL 仍能下载',
+        flatDl.status === 200 && flatDl.body.length === 64,
+        `状态 ${flatDl.status}, ${flatDl.body.length} 字节`);
+
+      const platformList = JSON.parse((await request(port, '/api/platforms')).body.toString());
+      const chanEntry = platformList.platforms.find((p) => p.name === chanPlatform);
+      const flatEntry = platformList.platforms.find((p) => p.name === flatPlatform);
+      check('/api/platforms 报出分渠道布局平台的实际渠道列表',
+        chanEntry && Array.isArray(chanEntry.channels)
+          && chanEntry.channels.includes('beta') && chanEntry.channels.includes('default'),
+        `channels=${JSON.stringify(chanEntry && chanEntry.channels)}`);
+      check('/api/platforms 对平铺布局只报默认渠道',
+        flatEntry && flatEntry.channels.length === 1,
+        `channels=${JSON.stringify(flatEntry && flatEntry.channels)}`);
+      check('/api/platforms 同时给出配置声明的渠道名（便于发现"目录建了但名字没配"）',
+        Array.isArray(platformList.configuredChannels)
+          && platformList.configuredChannels.includes('beta'),
+        JSON.stringify(platformList.configuredChannels));
+
+      // ---------------- 灰度规则（协议 2） ----------------
+      //
+      // 语义：一条规则内是 AND，规则之间是 OR。
+      // 这里逐条验证每种条件，特别是"没提供判断依据时不能乐观放行"。
+      section('灰度规则');
+
+      app.locals.configManager.patch({
+        hotUpdate: {
+          gray: {
+            enabled: true,
+            percent: 0,
+            rules: [
+              { name: 'whitelist', devices: ['dev-aaa'] },
+              { name: 'beta-only', channels: ['beta'] },
+              { name: 'new-app', minAppVersion: '1.5.0', percent: 100 },
+            ],
+          },
+        },
+      });
+
+      const grayOf = async (qs) => {
+        const r = await request(port, `/api/version?platform=Android&current=0.0.1${qs}`);
+        return JSON.parse(r.body.toString()).gray || {};
+      };
+
+      const wl = await grayOf('&deviceId=dev-aaa');
+      check('设备白名单命中即入组（不看同条规则里的其它条件）',
+        wl.selected === true && wl.matchedRule === 'whitelist',
+        `selected=${wl.selected}, rule=${wl.matchedRule}`);
+
+      const betaOnly = await grayOf('&deviceId=other&channel=beta');
+      check('按渠道灰度：命中 beta 渠道的规则',
+        betaOnly.selected === true && betaOnly.matchedRule === 'beta-only',
+        `selected=${betaOnly.selected}, rule=${betaOnly.matchedRule}`);
+
+      const oldApp = await grayOf('&deviceId=other&appVersion=1.0.0');
+      check('主包版本低于门槛时不入组',
+        oldApp.selected === false, `selected=${oldApp.selected}`);
+
+      const newApp = await grayOf('&deviceId=other&appVersion=2.0.0');
+      check('主包版本达标且百分比 100 时入组',
+        newApp.selected === true, `selected=${newApp.selected}`);
+
+      // ⚠️ 这条最重要：没报主包版本时不能乐观放行
+      const noAppVer = await grayOf('&deviceId=other');
+      check('没报 appVersion 时不认定满足版本条件（乐观放行会让本该挡住的设备更上去）',
+        noAppVer.selected === false, `selected=${noAppVer.selected}`);
+
+      check('未入组时仍给出 needUpdate=false 与原因',
+        noAppVer.reason === 'no-rule-matched', `reason=${noAppVer.reason}`);
+
+      // 开了灰度但没给规则：不能把所有人挡在外面
+      app.locals.configManager.patch({ hotUpdate: { gray: { enabled: true, percent: 0, rules: [] } } });
+      const noRules = await grayOf('&deviceId=x');
+      check('开了灰度但没配规则时不筛选任何人（"挡住所有人"比"没生效"更糟）',
+        noRules.selected === true && noRules.reason === 'no-rules',
+        `selected=${noRules.selected}, reason=${noRules.reason}`);
+
+      // 旧配置的顶层 percent 仍要能用
+      app.locals.configManager.patch({ hotUpdate: { gray: { enabled: true, percent: 100, rules: [] } } });
+      const legacyPercent = await grayOf('&deviceId=y');
+      check('旧配置的顶层 percent 仍然生效（升级不该让旧配置失效）',
+        legacyPercent.selected === true, `selected=${legacyPercent.selected}`);
+
+      // 关掉灰度就不该有 gray 字段
+      app.locals.configManager.patch({ hotUpdate: { gray: { enabled: false, percent: 0, rules: [] } } });
+      const off = JSON.parse(
+        (await request(port, '/api/version?platform=Android&current=0.0.1')).body.toString(),
+      );
+      check('灰度关闭时响应里不带 gray 字段', off.gray === undefined, JSON.stringify(off.gray));
+    } finally {
+      app.locals.configManager.patch({ hotUpdate: prevHotUpdate });
+      await removeDir(chanDir);
+      await removeDir(flatDir);
+      app.locals.assetServer.invalidateManifest();
+    }
+
     // ---------------- CORS / 跨站防护的判定基准是「同源」 ----------------
     //
     // 这里曾经有个影响跨设备使用的 bug：判定写成了"Origin 的 hostname 是不是

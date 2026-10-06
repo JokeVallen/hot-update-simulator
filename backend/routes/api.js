@@ -104,7 +104,7 @@ function compareVersions(a, b) {
 }
 
 /**
- * 判断某个设备是否落在灰度分组里。
+ * 判断某个设备是否落在灰度分组里（按 deviceId 百分比）。
  * 用设备标识的 md5 取模，所以同一个设备每次的结果都一样——
  * 灰度必须稳定，否则客户端会一会儿看到新版本一会儿看到旧版本。
  */
@@ -112,6 +112,78 @@ function inGrayGroup(deviceId, percent) {
   if (!deviceId) return true; // 没给设备标识就不拦，避免全部被挡
   const bucket = crypto.createHash('md5').update(String(deviceId)).digest().readUInt32BE(0) % 100;
   return bucket < percent;
+}
+
+/**
+ * 灰度规则求值。
+ *
+ * 为什么从"只有 deviceId 百分比"扩展成规则列表：
+ * 真实灰度不只是按比例分流 —— 还要能指定白名单、限定主包版本区间、
+ * 只对某个渠道或地区生效。只有百分比的话，"先给内部同学开"这种事都做不了。
+ *
+ * 语义（最容易搞混的地方，写清楚）：
+ *   * **一条规则内**：写了的条件之间是 **AND**（都满足才算命中）
+ *   * **规则之间**：命中**任意一条**即进入灰度组（OR）
+ *
+ * 所以"白名单无条件进 + 10% 随机分流"要写成**两条**规则；
+ * 写成一条会变成"白名单里且在那 10% 里"，不是想要的语义。
+ *
+ * @returns {{selected:boolean, matchedRule:string|null, reason:string}}
+ */
+function evaluateGrayRules(gray, ctx) {
+  const rules = Array.isArray(gray.rules) ? gray.rules : [];
+
+  // 兼容旧配置：顶层 percent 等价于一条"只看百分比"的规则。
+  // 有了 rules 之后它是冗余的，但旧配置不该因为升级就失效。
+  const legacy = [];
+  if (!rules.length && Number(gray.percent) > 0) {
+    legacy.push({ name: 'percent', percent: Number(gray.percent) });
+  }
+
+  const all = [...rules, ...legacy];
+  if (!all.length) {
+    // 开了灰度却没给任何规则：不做筛选。
+    // 此时"挡住所有人"比"灰度没生效"更糟 —— 后者至少功能可用。
+    return { selected: true, matchedRule: null, reason: 'no-rules' };
+  }
+
+  for (const rule of all) {
+    if (rule.enabled === false) continue;
+
+    // 白名单命中就直接算这条规则成立，不再看同一条里的其它条件 ——
+    // "把某人加进白名单"的意图就是"无条件给他"，再叠加百分比很反直觉。
+    if (Array.isArray(rule.devices) && rule.devices.length) {
+      const id = ctx.deviceId ? String(ctx.deviceId) : '';
+      if (id && rule.devices.map(String).includes(id)) {
+        return { selected: true, matchedRule: rule.name || 'devices', reason: 'whitelisted' };
+      }
+      continue; // 白名单没命中，整条规则不成立
+    }
+
+    if (Array.isArray(rule.channels) && rule.channels.length
+      && !rule.channels.map(String).includes(String(ctx.channel))) continue;
+    if (Array.isArray(rule.platforms) && rule.platforms.length
+      && !rule.platforms.map(String).includes(String(ctx.platform))) continue;
+    if (Array.isArray(rule.regions) && rule.regions.length) {
+      // 地区由客户端 ?region= 声明；没声明就不匹配带地域条件的规则
+      if (!ctx.region || !rule.regions.map(String).includes(String(ctx.region))) continue;
+    }
+    // 版本区间：没报主包版本时**不敢认定满足** ——
+    // 乐观放行会让本该挡住的设备拿到新版本
+    if (rule.minAppVersion) {
+      if (!ctx.appVersion) continue;
+      if (compareVersions(String(ctx.appVersion), String(rule.minAppVersion)) < 0) continue;
+    }
+    if (rule.maxAppVersion) {
+      if (!ctx.appVersion) continue;
+      if (compareVersions(String(ctx.appVersion), String(rule.maxAppVersion)) > 0) continue;
+    }
+    if (Number(rule.percent) > 0 && !inGrayGroup(ctx.deviceId, Number(rule.percent))) continue;
+
+    return { selected: true, matchedRule: rule.name || 'rule', reason: 'matched' };
+  }
+
+  return { selected: false, matchedRule: null, reason: 'no-rule-matched' };
 }
 
 /**
@@ -173,15 +245,19 @@ function buildVersionDecision({ manifest, query, hotUpdate }) {
   // 语义比较，不是字符串严格相等：客户端报 "1.0" 而清单是 "1.0.0"
   // 时不应判定为需要更新（原实现会让客户端每次启动都被要求热更）。
   let needUpdate = !currentVersion || compareVersions(currentVersion, manifest.version) !== 0;
-  let grayBlocked = false;
 
-  // 灰度：命中灰度组的客户端才看得到新版本，其余维持现状
+  // 灰度：命中灰度组的客户端才看得到新版本，其余维持现状。
+  // 规则求值见 evaluateGrayRules —— 一条规则内是 AND，规则之间是 OR。
+  let gray = null;
   if (hotUpdate.gray && hotUpdate.gray.enabled) {
-    const selected = inGrayGroup(query.deviceId, Number(hotUpdate.gray.percent) || 0);
-    if (!selected) {
-      grayBlocked = true;
-      needUpdate = false;
-    }
+    gray = evaluateGrayRules(hotUpdate.gray, {
+      deviceId: query.deviceId,
+      channel,
+      platform: manifest.platform,
+      region: query.region,
+      appVersion,
+    });
+    if (!gray.selected) needUpdate = false;
   }
 
   // 低于最低支持版本就强制更新
@@ -213,7 +289,19 @@ function buildVersionDecision({ manifest, query, hotUpdate }) {
     generatedAt: manifest.generatedAt,
     // 代码热更轨道；平台没配 code 块时为 null（客户端据此知道这个平台没有代码热更）
     code: buildCodeDecision({ code: manifest.code, query, appVersion }),
-    ...(grayBlocked ? { grayBlocked: true, grayPercent: hotUpdate.gray.percent } : {}),
+    // 灰度结果。命中与否都给出，并把命中的是哪条规则一并告知 ——
+    // "为什么我没进灰度"是最常见的问题，不给依据就只能靠猜。
+    ...(gray
+      ? {
+        gray: {
+          enabled: true,
+          selected: gray.selected,
+          matchedRule: gray.matchedRule,
+          reason: gray.reason,
+        },
+        ...(gray.selected ? {} : { grayBlocked: true }),
+      }
+      : {}),
   };
 }
 
@@ -269,6 +357,39 @@ function withCodeSummary(manifest) {
 module.exports = function createApiRouter({ configManager, assetServer }) {
   const router = express.Router();
 
+  /**
+   * 构建清单，并把渠道带进去。
+   *
+   * 渠道必须一路传到 assetServer：它决定读哪个目录，所以也决定缓存键。
+   * 漏传的表现是"请求 beta 却拿到 default 的内容"，而且不报错。
+   */
+  function manifestFor(platform, req) {
+    return assetServer.buildManifest(platform, {
+      channel: req.query.channel ? String(req.query.channel) : '',
+    });
+  }
+
+  /** 平台或渠道不存在时，给出能自助排查的错误（而不是一句"404"）。 */
+  function notFoundBody(platform, req) {
+    const wanted = req.query.channel ? String(req.query.channel) : null;
+    const channels = assetServer.listChannels(platform);
+    if (channels.length) {
+      return {
+        error: wanted
+          ? `平台 ${platform} 下没有渠道 "${wanted}"`
+          : `平台 ${platform} 不存在或没有资源目录`,
+        availableChannels: channels,
+        hint: wanted
+          ? `把 ?channel= 改成 ${channels.join(' / ')} 之一，或建一个名为 "${wanted}" 的目录`
+          : '检查资产目录，或在配置里改 server.assetDir',
+      };
+    }
+    return {
+      error: `平台不存在或没有资源目录：${platform}`,
+      availablePlatforms: assetServer.listPlatforms(),
+    };
+  }
+
   /** 取平台参数，缺失时返回 400。 */
   function requirePlatform(req, res) {
     const platform = req.query.platform;
@@ -309,9 +430,12 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
     try {
       const names = assetServer.listPlatforms();
       const platforms = await Promise.all(names.map(async (name) => {
-        const manifest = await assetServer.buildManifest(name);
+        const channels = assetServer.listChannels(name);
+        const manifest = await assetServer.buildManifest(name, { channel: '' });
         return {
           name,
+          // 实际有内容的渠道。分渠道布局下会有多个；平铺布局下只有默认渠道。
+          channels,
           version: manifest ? manifest.version : null,
           fileCount: manifest ? manifest.fileCount : 0,
           totalSize: manifest ? manifest.totalSize : 0,
@@ -320,7 +444,14 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
           codeFileCount: manifest && manifest.code ? manifest.code.fileCount : 0,
         };
       }));
-      res.json({ assetRoot: assetServer.root(), platforms });
+      res.json({
+        assetRoot: assetServer.root(),
+        // 配置里声明了哪些渠道名。**只有出现在这里的名字才会被当成渠道目录**，
+        // 所以平铺布局下的 bundles/、dll/ 不会被误认。
+        configuredChannels: assetServer.channels(),
+        defaultChannel: assetServer.defaultChannel(),
+        platforms,
+      });
     } catch (err) {
       next(err);
     }
@@ -350,9 +481,9 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
     if (!platform) return undefined;
 
     try {
-      const manifest = await assetServer.buildManifest(platform);
+      const manifest = await manifestFor(platform, req);
       if (!manifest) {
-        return res.status(404).json({ error: `平台不存在或没有资源目录：${platform}` });
+        return res.status(404).json(notFoundBody(platform, req));
       }
       const hotUpdate = configManager.get('hotUpdate') || {};
       return res.json(buildVersionDecision({ manifest, query: req.query, hotUpdate }));
@@ -413,9 +544,9 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
     if (!platform) return undefined;
 
     try {
-      const manifest = await assetServer.buildManifest(platform);
+      const manifest = await manifestFor(platform, req);
       if (!manifest) {
-        return res.status(404).json({ error: `平台不存在或没有资源目录：${platform}` });
+        return res.status(404).json(notFoundBody(platform, req));
       }
 
       // 竞态校验放在取轨道之前：身份不对的话，无论是资源还是代码轨道都不该给。
@@ -468,9 +599,9 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
     if (!platform) return undefined;
 
     try {
-      const manifest = await assetServer.buildManifest(platform);
+      const manifest = await manifestFor(platform, req);
       if (!manifest) {
-        return res.status(404).json({ error: `平台不存在或没有资源目录：${platform}` });
+        return res.status(404).json(notFoundBody(platform, req));
       }
       const hotUpdate = configManager.get('hotUpdate') || {};
       // 复用同一个判断函数，保证与 /api/version 结论一致

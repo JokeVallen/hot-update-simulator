@@ -256,8 +256,9 @@ curl "http://localhost:5500/api/version?platform=Android&current=1.5.0&codeCurre
   整包 DLL 的差量下发做不了。
 - **没有文件依赖顺序**：清单是平铺的，没有"必须先下 A 再下 B"。
 - **没有代码专属校验**：Lua 字节码版本、DLL 架构不匹配之类，服务器不认。
-- **`channel` 仍是装饰性的**：做不到"beta 渠道拿另一份 DLL"。
-  绕法是当成两个平台（`Android-beta` / `Android-prod`）——平台名本来就是任意目录名。
+- **没有差量包**：见上。
+
+渠道**已经真正影响内容**了（协议 2 起），做法见前面的「渠道真正影响内容」一节。
 
 ---
 
@@ -368,6 +369,45 @@ curl "http://localhost:5500/api/manifest?platform=Android&expectVersion=1.2.0"
 
 > 更省事的做法：直接用 `GET /api/check`——它**一次返回版本判断和清单**，
 > 结构上就不存在这个竞态。
+
+### 渠道真正影响内容
+
+`channel` 现在**决定服务端读哪个目录**，不只是被回显。
+
+平台目录下以配置里的渠道名命名的子目录，就是那个渠道的内容：
+
+```
+storage/assets/Android/
+  default/                 ← 渠道名来自 hotUpdate.channels
+    manifest.json
+    bundles/role.ab
+  beta/
+    manifest.json
+    bundles/role.ab        ← 可以和 default 完全不同
+```
+
+请求时带上渠道，URL 里也会带上渠道那一段：
+
+```bash
+curl "http://localhost:5500/api/version?platform=Android&channel=beta"
+# 清单里的 url 变成 /assets/Android/beta/bundles/role.ab
+```
+
+**旧布局一行都不用改**。判据是"平台目录下有没有以渠道名命名的子目录"：
+
+| 布局 | 例子 | 行为 |
+|---|---|---|
+| **平铺**（旧） | `Android/bundles/role.ab` | 整个平台目录就是默认渠道，URL 不带渠道段 |
+| **分渠道**（新） | `Android/default/bundles/role.ab` | 按渠道解析，URL 带渠道段 |
+
+`bundles/`、`dll/` 这些目录**不会被误认成渠道**——只有出现在
+`hotUpdate.channels` 配置里的名字才算。所以想用多渠渠道时，
+建一个 `beta/` 目录并在配置里声明即可。
+
+渠道拼错会返回 **404** 并列出可用渠道，**不会静默退回默认渠道**——
+"beta 用户拿到了正式内容"这种事，不报错的话根本查不出来。
+
+`GET /api/platforms` 会列出每个平台实际有内容的渠道，以及配置里声明了哪些名字。
 
 ---
 
@@ -695,9 +735,19 @@ curl http://localhost:5500/api/system
   },
   "hotUpdate": {
     "defaultChannel": "default",
-    "channels": ["default", "beta", "dev"],
+    "channels": ["default", "beta", "dev"],   // 渠道名。只有这里声明的名字才会被当成渠道目录
     "hashAlgorithms": ["md5"],   // 文件摘要算法，第一个是主算法（清单 hash 与 ETag 都用它）
-    "gray": { "enabled": false, "percent": 0 }   // 灰度发布百分比
+    "gray": {
+      "enabled": false,
+      // 灰度规则。语义：**一条规则内是 AND，规则之间是 OR**
+      "rules": [
+        { "name": "内部白名单", "devices": ["dev-001", "dev-002"] },
+        { "name": "beta 渠道全量", "channels": ["beta"] },
+        { "name": "只给新主包", "minAppVersion": "1.5.0" },
+        { "name": "随机 10%", "percent": 10 }
+      ],
+      "percent": 0                 // 兼容旧配置的简写；有 rules 时被忽略
+    }
   },
   "logging": {
     "maxEntries": 2000         // 日志环形缓冲上限

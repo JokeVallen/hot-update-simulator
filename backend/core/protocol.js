@@ -20,7 +20,7 @@
 //     "哪个版本起语义变了"，否则老客户端升级后会踩坑
 
 /** 协议版本。只在**破坏性**变更时递增。 */
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 /**
  * 能力位。每一项都对应一段可观察的行为，客户端据此决定走哪条分支。
@@ -37,12 +37,16 @@ const CAPABILITIES = [
   'hashMatchesEtag',
   // 清单可固定版本：?expectVersion= / ?expectId= 不匹配时返回 409，用于消除竞态
   'manifestPinning',
-  // 灰度支持 deviceId 百分比（后续版本会扩展为规则列表）
-  'grayByDeviceId',
   // 清单条目同时给出算法名与多算法摘要
   'multiAlgorithmHash',
   // JSON 响应支持 gzip
   'gzip',
+  // ===== 协议 2 新增 =====
+  // **渠道真正影响内容**：/{platform}/{channel}/ 目录布局，URL 里带渠道那一段。
+  // 协议 1 里 channel 只被回显，不影响服务端返回什么。
+  'channelContent',
+  // 灰度规则列表：支持设备白名单、渠道、平台、地区、主包版本区间与百分比组合
+  'grayRules',
 ];
 
 /**

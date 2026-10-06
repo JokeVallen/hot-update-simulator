@@ -262,9 +262,9 @@ To be clear, this is **protocol-level** support, not a complete code hot-update 
 - **No inter-file dependency ordering**: the manifest is a flat list — no "download A before B".
 - **No code-specific validation**: Lua bytecode versions, DLL architecture mismatches, and the like
   are not understood by the server.
-- **`channel` is still decorative**: you cannot give the beta channel a different DLL. The workaround
-  is to treat it as two platforms (`Android-beta` / `Android-prod`) — platform names are arbitrary
-  directory names anyway.
+- **No differential patches**: see above.
+
+Channels **do** affect content now (since protocol 2) — see "Channels now affect content" above.
 
 ---
 
@@ -375,6 +375,48 @@ Much cheaper than discovering it after a partial download.
 
 > Simpler still: use `GET /api/check`, which returns the version decision and the manifest **in one
 > response** — that flow has no race by construction.
+
+### Channels now affect content
+
+`channel` now **decides which directory the server reads**, instead of merely being echoed back.
+
+A subdirectory of the platform directory named after a configured channel *is* that channel's content:
+
+```
+storage/assets/Android/
+  default/                 ← channel names come from hotUpdate.channels
+    manifest.json
+    bundles/role.ab
+  beta/
+    manifest.json
+    bundles/role.ab        ← may be entirely different from default
+```
+
+Pass the channel on the request, and it appears in the URLs too:
+
+```bash
+curl "http://localhost:5500/api/version?platform=Android&channel=beta"
+# the manifest's url becomes /assets/Android/beta/bundles/role.ab
+```
+
+**The old layout needs no changes at all.** The rule is "does the platform directory contain
+subdirectories named after configured channels?":
+
+| Layout | Example | Behaviour |
+|---|---|---|
+| **Flat** (old) | `Android/bundles/role.ab` | the whole platform directory is the default channel; URLs carry no channel segment |
+| **Per-channel** (new) | `Android/default/bundles/role.ab` | resolved per channel; URLs carry the channel segment |
+
+Directories like `bundles/` and `dll/` are **never mistaken for channels** — only names listed in
+`hotUpdate.channels` count. So to use several channels, create a `beta/` directory and declare it
+in the config.
+
+An unknown channel returns **404** listing the available channels, and **never falls back to the
+default silently** — "beta users received production content" is impossible to diagnose when
+nothing reports an error.
+
+`GET /api/platforms` lists the channels each platform actually has content for, plus the names
+declared in the config.
 
 ---
 
@@ -705,9 +747,19 @@ curl http://localhost:5500/api/system
   },
   "hotUpdate": {
     "defaultChannel": "default",
-    "channels": ["default", "beta", "dev"],
+    "channels": ["default", "beta", "dev"],   // Channel names. Only names declared here count as channel directories
     "hashAlgorithms": ["md5"],   // Digest algorithms; the first is primary (manifest hash and ETag both use it)
-    "gray": { "enabled": false, "percent": 0 }   // Gray release percentage
+    "gray": {
+      "enabled": false,
+      // Gray release rules. Semantics: **AND within one rule, OR across rules**
+      "rules": [
+        { "name": "internal whitelist", "devices": ["dev-001", "dev-002"] },
+        { "name": "all of beta channel", "channels": ["beta"] },
+        { "name": "new base packages only", "minAppVersion": "1.5.0" },
+        { "name": "random 10%", "percent": 10 }
+      ],
+      "percent": 0                 // Legacy shorthand; ignored when rules is non-empty
+    }
   },
   "logging": {
     "maxEntries": 2000         // Ring-buffer log capacity

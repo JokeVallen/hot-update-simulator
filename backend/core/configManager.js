@@ -62,6 +62,8 @@ const DEFAULTS = {
   },
   hotUpdate: {
     defaultChannel: 'default',
+    // 渠道名**真的参与目录解析**：平台目录下以这些名字命名的子目录就是渠道内容。
+    // 详见 assetServer.js 的 hasChannelLayout()。
     channels: ['default', 'beta', 'dev'],
     // 文件摘要算法。**第一个是主算法**：清单里的 hash 字段和资产的 ETag
     // 都用它，所以两者是同一个值 —— 客户端拿到清单就能本地判断
@@ -71,6 +73,17 @@ const DEFAULTS = {
     hashAlgorithms: ['md5'],
     gray: {
       enabled: false,
+      // 规则列表。语义：**一条规则内是 AND，规则之间是 OR**。
+      // 例：
+      //   { name: '内部白名单', devices: ['dev-001'] }            无条件放行
+      //   { name: 'beta 渠道全量', channels: ['beta'] }
+      //   { name: '老主包不参与', minAppVersion: '1.2.0' }
+      //   { name: '随机 10%', percent: 10 }
+      // 把"白名单"和"随机 10%"写成两条才会得到期望的并集；
+      // 写成一条会变成"白名单里且在那 10% 里"。
+      rules: [],
+      // 兼容旧配置：只按 deviceId 百分比分流时的简写。
+      // 有 rules 时它被忽略。
       percent: 0,
     },
   },
@@ -233,6 +246,30 @@ class ConfigManager extends EventEmitter {
     }
     c.hotUpdate.gray.enabled = Boolean(c.hotUpdate.gray.enabled);
     c.hotUpdate.gray.percent = clamp(c.hotUpdate.gray.percent, 0, 100);
+
+    // 灰度规则：逐条净化。非法项丢弃并记录，不静默留下半个能用的规则 ——
+    // 灰度规则写错的表现是"该进灰度的人没进"，比报错难查得多。
+    {
+      const raw = Array.isArray(c.hotUpdate.gray.rules) ? c.hotUpdate.gray.rules : [];
+      const toStrList = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
+      c.hotUpdate.gray.rules = raw
+        .filter((r) => r && typeof r === 'object')
+        .map((r, i) => ({
+          name: String(r.name || `规则 ${i + 1}`).slice(0, 120),
+          enabled: r.enabled === undefined ? true : Boolean(r.enabled),
+          devices: toStrList(r.devices),
+          channels: toStrList(r.channels),
+          platforms: toStrList(r.platforms),
+          regions: toStrList(r.regions),
+          minAppVersion: r.minAppVersion ? String(r.minAppVersion) : null,
+          maxAppVersion: r.maxAppVersion ? String(r.maxAppVersion) : null,
+          percent: clamp(r.percent, 0, 100),
+        }))
+        // 一个条件都没写的规则会匹配所有人 —— 那等于"灰度全开"，
+        // 几乎不可能是本意，丢掉并让使用者发现。
+        .filter((r) => r.devices.length || r.channels.length || r.platforms.length
+          || r.regions.length || r.minAppVersion || r.maxAppVersion || r.percent > 0);
+    }
 
     // 摘要算法：只留 Node 真的支持的，空列表回退默认值。
     // 过滤放在这里而不是使用处，是为了让"配错了"在写配置时就暴露出来，

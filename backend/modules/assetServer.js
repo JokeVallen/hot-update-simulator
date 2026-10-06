@@ -122,10 +122,95 @@ class AssetServer {
     }
   }
 
+  /** 配置里声明的渠道名。这个列表现在**真的**参与目录解析了。 */
+  channels() {
+    const list = this.configManager.get('hotUpdate.channels');
+    return Array.isArray(list) && list.length ? list.map(String) : ['default'];
+  }
+
+  /** 默认渠道名。 */
+  defaultChannel() {
+    return this.configManager.get('hotUpdate.defaultChannel')
+      || this.channels()[0]
+      || 'default';
+  }
+
+  /**
+   * 平台目录是不是「按渠道分层」的布局。
+   *
+   * 判据：平台目录下存在**以配置的渠道名命名**的子目录。
+   *
+   * 这个判据同时决定了要不要迁移：旧布局（`Android/bundles/...`）里没有叫
+   * `default`/`beta` 的子目录，所以判定为"平铺布局"，整个平台目录就是默认渠道
+   * —— 已有数据一行都不用动。想用多渠渠道时，建一个 `beta/` 目录即可。
+   *
+   * 用配置里的渠道名而不是"任意子目录"，是因为平铺布局下 `bundles/`、`dll/`
+   * 也是子目录；不区分的话会把它们误当成渠道。
+   */
+  hasChannelLayout(platformDir) {
+    const names = this.channels();
+    try {
+      return fs.readdirSync(platformDir, { withFileTypes: true })
+        .some((e) => e.isDirectory() && names.includes(e.name));
+    } catch {
+      return false;
+    }
+  }
+
+  /** 列出某个平台实际有内容的渠道。 */
+  listChannels(platform) {
+    const root = this.root();
+    const platformDir = this.safeResolve(root, platform);
+    if (!platformDir || !fs.existsSync(platformDir)) return [];
+
+    if (!this.hasChannelLayout(platformDir)) {
+      // 平铺布局：整个平台就是默认渠道
+      return [this.defaultChannel()];
+    }
+    const names = this.channels();
+    try {
+      return fs.readdirSync(platformDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && names.includes(e.name))
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 解析出某个平台 + 渠道的**内容目录**。
+   *
+   * @returns {{dir:string, channel:string, channelInUrl:boolean, platformDir:string}|null}
+   *   channelInUrl 表示资产 URL 里要不要带渠道这一段
+   */
+  resolveChannelDir(platform, channel) {
+    const root = this.root();
+    const platformDir = this.safeResolve(root, platform);
+    if (!platformDir || !fs.existsSync(platformDir)) return null;
+
+    if (!this.hasChannelLayout(platformDir)) {
+      // 平铺布局：忽略请求的渠道，整个平台目录就是默认渠道的内容。
+      // 不做"渠道不存在"的报错，因为这是旧布局，本来就没有渠道概念。
+      return {
+        dir: platformDir,
+        platformDir,
+        channel: this.defaultChannel(),
+        channelInUrl: false,
+      };
+    }
+
+    const wanted = channel || this.defaultChannel();
+    const dir = this.safeResolve(platformDir, wanted);
+    if (!dir || !fs.existsSync(dir)) return null;
+
+    return { dir, platformDir, channel: wanted, channelInUrl: true };
+  }
+
   /**
    * 把请求路径解析成磁盘上的文件。
    * @param {string} platform 平台名，例如 Android
-   * @param {string} subPath  平台目录下的相对路径
+   * @param {string} subPath  平台目录下的相对路径；分层布局时**第一段是渠道名**
    * @returns {{ok:true, filePath:string, stat:fs.Stats}|{ok:false, status:number, message:string}}
    */
   resolveAsset(platform, subPath) {
@@ -152,7 +237,42 @@ class AssetServer {
       return { ok: false, status: 400, message: '非法的平台名' };
     }
 
-    const filePath = this.safeResolve(platformDir, subPath);
+    // 分层布局：URL 的第一段必须是渠道名。
+    // 这里给出明确的 404 而不是"静默退回默认渠道" —— 渠道拼错时
+    // 悄悄给一份别的渠道的内容，比报错难查得多。
+    let contentDir = platformDir;
+    let rest = subPath;
+    if (this.hasChannelLayout(platformDir)) {
+      const segs = subPath.split('/');
+      const wanted = segs[0];
+      const names = this.channels();
+      if (!names.includes(wanted)) {
+        return {
+          ok: false,
+          status: 404,
+          message: `平台 ${platform} 按渠道分层，URL 第一段必须是渠道名。`
+            + `可用：${names.join(', ')}；收到 "${wanted}"。`
+            + `示例：/assets/${platform}/${this.defaultChannel()}/...`,
+        };
+      }
+      const dir = this.safeResolve(platformDir, wanted);
+      if (!dir || !fs.existsSync(dir)) {
+        return {
+          ok: false,
+          status: 404,
+          message: `渠道 "${wanted}" 在平台 ${platform} 下没有目录。`
+            + `已有的：${this.listChannels(platform).join(', ') || '（无）'}`,
+        };
+      }
+      contentDir = dir;
+      rest = segs.slice(1).join('/');
+    }
+
+    if (!rest) {
+      return { ok: false, status: 400, message: '缺少文件路径' };
+    }
+
+    const filePath = this.safeResolve(contentDir, rest);
     if (!filePath) {
       // 这个分支就是有人尝试路径穿越了，值得记一笔
       return { ok: false, status: 403, message: '路径越界，已拒绝' };
@@ -438,8 +558,12 @@ class AssetServer {
    */
   async buildManifest(platform, options = {}) {
     const useCache = options.useCache !== false;
+    // 渠道影响内容，所以缓存必须按 (平台, 渠道) 分键。
+    // 只用平台当键的话，请求 beta 会拿到 default 的缓存 —— 而且不报错。
+    const channel = options.channel ? String(options.channel) : '';
+    const cacheKey = `${platform}::${channel}`;
 
-    const cached = this.manifestCache.get(platform);
+    const cached = this.manifestCache.get(cacheKey);
     if (useCache && cached) {
       // 缓存里既可能是已经算好的结果，也可能是"正在算"的 Promise。
       // 后者用于合并并发请求，避免同一个平台被同时扫描好几遍——
@@ -451,35 +575,40 @@ class AssetServer {
       }
     }
 
-    const pending = this._buildManifestUncached(platform);
-    this.manifestCache.set(platform, { at: Date.now(), data: pending });
+    const pending = this._buildManifestUncached(platform, channel);
+    this.manifestCache.set(cacheKey, { at: Date.now(), data: pending });
 
     let manifest;
     try {
       manifest = await pending;
     } catch (err) {
-      this.manifestCache.delete(platform);
+      this.manifestCache.delete(cacheKey);
       throw err;
     }
 
     if (!manifest) {
-      this.manifestCache.delete(platform);
+      this.manifestCache.delete(cacheKey);
       return null;
     }
-    this.manifestCache.set(platform, { at: Date.now(), data: manifest });
+    this.manifestCache.set(cacheKey, { at: Date.now(), data: manifest });
     return manifest;
   }
 
-  async _buildManifestUncached(platform) {
-    const root = this.root();
-    const platformDir = this.safeResolve(root, platform);
-    if (!platformDir || !fs.existsSync(platformDir)) {
-      return null;
-    }
+  async _buildManifestUncached(platform, channel = '') {
+    // 渠道解析：可能是分层布局（内容在 {platform}/{channel}/ 下），
+    // 也可能是平铺布局（整个平台目录就是默认渠道，旧数据不用迁移）。
+    const resolved = this.resolveChannelDir(platform, channel);
+    if (!resolved) return null;
+    const { dir: contentDir, channel: actualChannel, channelInUrl } = resolved;
 
-    // 平台自带的元信息文件
+    // 资产 URL 的前缀：分层布局要带上渠道那一段
+    const urlPrefix = channelInUrl
+      ? `/assets/${encodeURIComponent(platform)}/${encodeURIComponent(actualChannel)}`
+      : `/assets/${encodeURIComponent(platform)}`;
+
+    // 平台自带的元信息文件（在内容目录里）
     let meta = {};
-    const metaPath = path.join(platformDir, 'manifest.json');
+    const metaPath = path.join(contentDir, 'manifest.json');
     if (fs.existsSync(metaPath)) {
       try {
         meta = JSON.parse(await fs.promises.readFile(metaPath, 'utf8'));
@@ -489,7 +618,7 @@ class AssetServer {
     }
 
     // 代码热更轨道（可选）。要先于资源清单算出来：它的文件必须从资源清单里排除。
-    const code = await this._buildCodeTrack(platform, platformDir, meta.code);
+    const code = await this._buildCodeTrack(platform, contentDir, meta.code, urlPrefix);
 
     // 主算法：清单里的 hash 和资产的 ETag 都用它，所以两者是同一个值。
     const algos = this.hashAlgorithms();
@@ -502,17 +631,18 @@ class AssetServer {
       // 那是使用方自己的选择，不是 bug。
       files = meta.files.map((f) => {
         const declared = f.hash || f.md5 || null;
+        const p = String(f.path || '').replace(/\\/g, '/');
         return {
-          path: String(f.path || '').replace(/\\/g, '/'),
+          path: p,
           size: Number(f.size) || 0,
           hash: declared,
           hashAlgo: declared ? (f.hashAlgo || 'md5') : null,
           hashes: declared ? { [f.hashAlgo || 'md5']: declared } : {},
-          url: f.url || `/assets/${encodeURIComponent(platform)}/${String(f.path || '').replace(/\\/g, '/')}`,
+          url: f.url || `${urlPrefix}/${p.split('/').map(encodeURIComponent).join('/')}`,
         };
       });
     } else {
-      const scanned = await AssetServer.scanDirectory(platformDir, platformDir, 4, algos);
+      const scanned = await AssetServer.scanDirectory(contentDir, contentDir, 4, algos);
       files = scanned.map((f) => ({
         path: f.path,
         size: f.size,
@@ -521,7 +651,7 @@ class AssetServer {
         // 新增：说明 hash 用的是什么算法；多算法时 hashes 里全都有
         hashAlgo: primary,
         hashes: f.hashes,
-        url: `/assets/${encodeURIComponent(platform)}/${f.path.split('/').map(encodeURIComponent).join('/')}`,
+        url: `${urlPrefix}/${f.path.split('/').map(encodeURIComponent).join('/')}`,
       }));
       // manifest.json 自己不该出现在下载清单里
       files = files.filter((f) => f.path !== 'manifest.json');
@@ -537,11 +667,16 @@ class AssetServer {
 
     const manifest = {
       platform,
+      // 实际生效的渠道（可能和请求的不同：平铺布局下一定是默认渠道）
+      channel: actualChannel,
+      channelInUrl,
+      // meta.channel 是使用方在 manifest.json 里写的标签，仅作展示；
+      // 真正决定内容的是目录，这两者可以不一致，如实都给出。
+      declaredChannel: meta.channel || null,
       version: meta.version || AssetServer.deriveVersion(files),
       minVersion: meta.minVersion || null,
       forceUpdate: Boolean(meta.forceUpdate),
       notice: meta.notice || '',
-      channel: meta.channel || null,
       hashAlgorithms: algos,
       fileCount: files.length,
       totalSize,
@@ -579,7 +714,7 @@ class AssetServer {
    * @param {string} platformDir
    * @param {object|undefined} raw manifest.json 里的 code 块
    */
-  async _buildCodeTrack(platform, platformDir, raw) {
+  async _buildCodeTrack(platform, contentDir, raw, urlPrefix) {
     if (!raw || typeof raw !== 'object') return null;
 
     const dir = String(raw.dir || 'dll')
@@ -588,6 +723,7 @@ class AssetServer {
 
     const algos = this.hashAlgorithms();
     const primary = algos[0];
+    const prefix = urlPrefix || `/assets/${encodeURIComponent(platform)}`;
 
     /** 把扫描结果铺成统一的条目形状（和资源轨道一致）。 */
     const shape = (pathStr, size, hashes) => ({
@@ -596,7 +732,7 @@ class AssetServer {
       hash: hashes[primary] || null,
       hashAlgo: primary,
       hashes,
-      url: `/assets/${encodeURIComponent(platform)}/${pathStr.split('/').map(encodeURIComponent).join('/')}`,
+      url: `${prefix}/${pathStr.split('/').map(encodeURIComponent).join('/')}`,
     });
 
     let files;
@@ -611,10 +747,10 @@ class AssetServer {
         return item;
       });
     } else {
-      const codeDir = this.safeResolve(platformDir, dir);
+      const codeDir = this.safeResolve(contentDir, dir);
       if (!codeDir || !fs.existsSync(codeDir)) return null;
       // 第二个参数是 base：让 path 带上 "dll/" 前缀，URL 才对得上
-      const scanned = await AssetServer.scanDirectory(codeDir, platformDir, 4, algos);
+      const scanned = await AssetServer.scanDirectory(codeDir, contentDir, 4, algos);
       files = scanned.map((f) => shape(f.path, f.size, f.hashes));
     }
 
@@ -640,8 +776,15 @@ class AssetServer {
 
   /** 清掉 manifest 缓存（上传新包后调用，让客户端立刻看到新版本）。 */
   invalidateManifest(platform) {
-    if (platform) this.manifestCache.delete(platform);
-    else this.manifestCache.clear();
+    if (platform) {
+      // 渠道分键之后，一个平台对应多条缓存，按前缀一起清掉
+      const prefix = `${platform}::`;
+      for (const key of [...this.manifestCache.keys()]) {
+        if (key === platform || key.startsWith(prefix)) this.manifestCache.delete(key);
+      }
+    } else {
+      this.manifestCache.clear();
+    }
   }
 
   /**
