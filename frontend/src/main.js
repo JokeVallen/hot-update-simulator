@@ -138,9 +138,10 @@ function renderTopbar() {
     }
 
     if (mismatch) {
-      footer.textContent += `  ⚠ 后端是 v${served}`
-      footer.title = `前端产物是 v${built}，后端是 v${served} ——`
-        + '多半是改了后端但没重新构建前端（npm run build）'
+      // 文案走语言包。硬编码中文会被 ui-check 的逐页漏翻扫描抓出来 ——
+      // 这条就是被它抓到的。
+      footer.textContent += `  ${t('footer.backendMismatch', { version: served })}`
+      footer.title = t('footer.mismatchHint', { built, served })
     }
   }
 }

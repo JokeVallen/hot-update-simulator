@@ -374,6 +374,28 @@ async function main() {
       Boolean(footerInfo.text) && footerInfo.text.includes(`v${expectedVersion}`),
       `期望 v${expectedVersion}，实际「${footerInfo.text}」`);
 
+    // 「模拟干预」卡片必须先说清"配置了什么"，再说"发生了什么"。
+    //
+    // 原来只有计数器，于是"配了规则但没请求命中"和"什么都没配"看起来一样，
+    // 而顶栏同时显示"模拟进行中"——两处矛盾且没有任何解释。
+    const simCard = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const cards = [...document.querySelectorAll('.hus-card')];
+        const target = cards.find((c) => /模拟干预|Simulation impact/.test(c.textContent));
+        if (!target) return JSON.stringify({ found: false });
+        return JSON.stringify({
+          found: true,
+          text: target.innerText.replace(/\\s+/g, ' ').slice(0, 240),
+          hasConfigLine: /没有启用任何模拟|No simulation is enabled/.test(target.innerText),
+        });
+      })()`,
+      returnByValue: true,
+    });
+    const simInfo = JSON.parse(simCard.result.value);
+    check('总览的「模拟干预」卡片刻意说明当前有没有启用模拟',
+      simInfo.found && simInfo.hasConfigLine,
+      simInfo.found ? `卡片内容：${simInfo.text}` : '没找到该卡片');
+
     // ---------------------------------------------------------- 主题切换
     //
     // 光看 data-bs-theme 属性不够 —— 属性设对了但 CSS 没跟上（比如变量名写错）

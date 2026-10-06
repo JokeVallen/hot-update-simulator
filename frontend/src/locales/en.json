@@ -20,6 +20,10 @@
     "dark": "Dark",
     "system": "System"
   },
+  "footer": {
+    "backendMismatch": "⚠ backend is v{version}",
+    "mismatchHint": "The frontend build is v{built} but the backend is v{served} — usually means the backend changed without rebuilding the frontend (npm run build)"
+  },
   "common": {
     "apply": "Apply",
     "save": "Save",
@@ -69,6 +73,17 @@
     "statusDist": "Status distribution",
     "topPaths": "Top endpoints",
     "simulated": "Simulation impact",
+    "cfgNone": "No simulation is enabled. All the zeros below are expected.",
+    "cfgOnNoParams": "Enabled, but no parameters set",
+    "cfgOffline": "Offline",
+    "cfgLatency": "Latency",
+    "cfgLoss": "Loss",
+    "cfgRulesEffective": "{total} rules, {effective} of them active",
+    "cfgRulesMasterOff": "{total} rules, but the master switch is off — none of them apply",
+    "cfgFaultOnNoRules": "Master switch is on, but there are no rules yet",
+    "cfgMoreRules": "{n} more…",
+    "cfgIdle": "The current configuration cannot have any effect: no active rules, or every parameter is 0.",
+    "cfgArmed": "Configured and at least one rule is active, but nothing matched within this window — the zeros above do not mean nothing is configured.",
     "delayed": "Delayed",
     "throttled": "Throttled",
     "faulted": "Faulted",

@@ -112,6 +112,16 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
     if (body.enabled === undefined) {
       return res.status(400).json({ error: '需要 enabled 字段' });
     }
+    // 规则走独立端点。以前传 rules 到这里会返回 200 但**静默丢弃** ——
+    // 调用方以为配上了，实际一条都没写进去，而且没有任何提示。
+    // 这类"默默忽略输入"是最难查的一类问题，所以直接报错并指路。
+    if (body.rules !== undefined) {
+      return res.status(400).json({
+        error: '这个端点只改总开关，不接受 rules',
+        hint: '新增规则用 POST /api/control/fault/rules，'
+          + '改某条用 PUT /api/control/fault/rules/{id}，删用 DELETE。',
+      });
+    }
     const cfg = configManager.patch({ fault: { enabled: Boolean(body.enabled) } });
     res.json({ ok: true, fault: { enabled: cfg.fault.enabled, rules: faultInjector.describeRules() } });
   });

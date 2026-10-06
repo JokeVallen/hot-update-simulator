@@ -20,6 +20,10 @@
     "dark": "深色",
     "system": "跟随系统"
   },
+  "footer": {
+    "backendMismatch": "⚠ 后端是 v{version}",
+    "mismatchHint": "前端产物是 v{built}，后端是 v{served} —— 多半是改了后端但没重新构建前端（npm run build）"
+  },
   "common": {
     "apply": "应用",
     "save": "保存",
@@ -69,6 +73,17 @@
     "statusDist": "状态码分布",
     "topPaths": "热点接口",
     "simulated": "模拟干预",
+    "cfgNone": "当前没有启用任何模拟。下面全是 0 是正常的。",
+    "cfgOnNoParams": "已启用，但没有设置任何参数",
+    "cfgOffline": "断网",
+    "cfgLatency": "延迟",
+    "cfgLoss": "丢包",
+    "cfgRulesEffective": "{total} 条，其中 {effective} 条会生效",
+    "cfgRulesMasterOff": "{total} 条，但总闸没开，都不会生效",
+    "cfgFaultOnNoRules": "总闸已开，但还没有任何规则",
+    "cfgMoreRules": "还有 {n} 条…",
+    "cfgIdle": "当前配置不会产生任何效果：没有启用的规则，或参数全是 0。",
+    "cfgArmed": "已配置且有规则会生效，但当前统计窗口内没有请求命中——上面的 0 不代表没配置。",
     "delayed": "被延迟",
     "throttled": "被限速",
     "faulted": "被注入故障",

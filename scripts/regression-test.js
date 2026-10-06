@@ -756,6 +756,31 @@ async function testAssetEdgeCases() {
     check('非法故障类型被拒绝（400）或已被规范化，而不是静默降级成 500',
       badType.status === 400 || (badType.status === 201 && JSON.parse(badType.body.toString()).rule.action.type === 'status'),
       `实际状态 ${badType.status}`);
+
+    // PATCH /fault 只改总开关。以前传 rules 到这里会返回 200 但**静默丢弃** ——
+    // 调用方以为配上了，实际一条都没写进去。这类"默默忽略输入"最难查，
+    // 所以现在直接 400 并指路到正确的端点。
+    const rulesToWrongEndpoint = await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true, rules: [{ name: 'x', action: { type: 'status' } }] }),
+    });
+    check('往 PATCH /fault 传 rules 会被 400 拒绝，而不是静默丢弃',
+      rulesToWrongEndpoint.status === 400,
+      `状态 ${rulesToWrongEndpoint.status}（200 说明又在默默忽略输入）`);
+    const rejectBody = JSON.parse(rulesToWrongEndpoint.body.toString());
+    check('400 里指明正确的端点，便于自助修正',
+      typeof rejectBody.hint === 'string' && rejectBody.hint.includes('/api/control/fault/rules'),
+      rejectBody.hint);
+
+    // 只改总开关仍然是 200（别把正常用法也堵死了）
+    const enabledOnly = await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    check('只改 enabled 仍然正常（400 不能误伤正常用法）',
+      enabledOnly.status === 200, `状态 ${enabledOnly.status}`);
     await clearFaults(port);
 
     // ---------------- 模拟范围：不能把控制面板自己搞坏 ----------------

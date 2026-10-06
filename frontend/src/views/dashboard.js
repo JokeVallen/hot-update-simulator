@@ -168,7 +168,7 @@ export class DashboardView extends View {
 
       <div class="row g-3">
         <div class="col-12 col-lg-5">
-          ${card(t('dashboard.simulated'), this.simulatedRows(sim, stats.throughput))}
+          ${card(t('dashboard.simulated'), this.interventionCard(sim, stats.throughput))}
         </div>
         <div class="col-12 col-lg-7">
           ${card(t('dashboard.topPaths'), this.topPathsTable(stats.topPaths))}
@@ -179,8 +179,126 @@ export class DashboardView extends View {
     this.drawStatus(stats.requests.byStatusClass)
   }
 
-  /** 模拟干预的明细。这一块是"为什么这么慢"的答案。 */
-  simulatedRows(sim, throughput) {
+  /**
+   * 模拟干预：先说"配置了什么"，再说"实际发生了什么"。
+   *
+   * 为什么必须把配置放前面：
+   *   这一栏原来只有计数器，而计数器统计的是**已经发生过的干预**。
+   *   于是"配了规则但窗口内没有请求命中"和"什么都没配"看起来一模一样 ——
+   *   全是 0。更糟的是顶栏同时显示"模拟进行中"（那个按配置算），
+   *   两处互相矛盾，而且没有任何解释。
+   *
+   *   故障规则的 describeRules() 本来就返回 hits 和 effective，
+   *   但界面一直没用 —— 这里把它用起来。
+   */
+  interventionCard(sim, throughput) {
+    const net = state.network || {}
+    const fault = state.fault || {}
+    const rules = Array.isArray(fault.rules) ? fault.rules : []
+
+    const netOn = Boolean(net.enabled)
+    const faultOn = Boolean(fault.enabled)
+    const effectiveRules = rules.filter((r) => r.effective)
+
+    // 网络是否真的设了参数。"开着但全是 0"和"没开"在效果上是一样的，
+    // 但原因不同，提示也得不同。
+    const netHasParams = netOn && Boolean(
+      net.offline || net.latencyMs || net.jitterMs || net.bandwidthKbps || net.packetLossRate,
+    );
+
+    // 配置状态用一个显式状态机，而不是几个互相独立的布尔量。
+    // 之前就是栽在这里：fault.enabled 为真但没规则时，
+    // "没有启用任何模拟"和"已配置但没命中"会同时显示，自相矛盾。
+    //
+    //   off     什么配置都没有
+    //   idle    配了，但当前配置不可能产生任何效果
+    //   armed   配了且有可能生效，但窗口内还没命中过
+    //   active  窗口内已经命中过
+    const anythingConfigured = netOn || faultOn || rules.length > 0;
+    const canTrigger = netHasParams || effectiveRules.length > 0;
+    const totalHits = ['delayed', 'throttled', 'faulted', 'dropped', 'ranged']
+      .reduce((n, k) => n + (Number(sim[k]) || 0), 0);
+
+    let state_ = 'off';
+    if (anythingConfigured) {
+      if (totalHits > 0) state_ = 'active';
+      else state_ = canTrigger ? 'armed' : 'idle';
+    }
+
+    // ---- 配置摘要 ----
+    const confLines = []
+
+    if (netOn) {
+      const parts = []
+      if (net.offline) parts.push(t('dashboard.cfgOffline'))
+      else {
+        if (net.latencyMs) {
+          parts.push(`${t('dashboard.cfgLatency')} ${net.latencyMs}ms`
+            + (net.jitterMs ? ` ±${net.jitterMs}ms` : ''))
+        }
+        if (net.bandwidthKbps) parts.push(`${(net.bandwidthKbps / 1000).toFixed(1)} Mbps`)
+        if (net.packetLossRate) {
+          parts.push(`${t('dashboard.cfgLoss')} ${(net.packetLossRate * 100).toFixed(0)}%`)
+        }
+      }
+      confLines.push({
+        label: t('nav.network'),
+        value: parts.length ? parts.join(' · ') : t('dashboard.cfgOnNoParams'),
+        warn: !parts.length,
+      })
+    }
+
+    if (rules.length) {
+      // 总闸没开时说清楚"规则都在，但都不会生效"——这是
+      // "我建了规则却什么都没发生"最常见的原因
+      confLines.push({
+        label: t('nav.faults'),
+        value: faultOn
+          ? t('dashboard.cfgRulesEffective', { total: rules.length, effective: effectiveRules.length })
+          : t('dashboard.cfgRulesMasterOff', { total: rules.length }),
+        warn: !faultOn || effectiveRules.length === 0,
+      })
+    } else if (faultOn) {
+      // 总闸开着却一条规则都没有：这正是最容易被误读成"没配置"的情形
+      confLines.push({
+        label: t('nav.faults'),
+        value: t('dashboard.cfgFaultOnNoRules'),
+        warn: true,
+      })
+    }
+
+    // 逐条列出规则（最多 4 条）：名称 + 类型 + 命中次数
+    const ruleItems = rules.slice(0, 4).map((r) => {
+      const type = (r.action && r.action.type) || '?'
+      const hits = Number(r.hits) || 0
+      const dim = r.effective ? '' : ' opacity-50'
+      return `
+        <div class="d-flex align-items-center justify-content-between small${dim}">
+          <span class="text-truncate me-2" title="${esc(r.name || '')}">
+            ${esc(r.name || '(未命名)')}
+            <span class="text-secondary mono ms-1">${esc(type)}</span>
+          </span>
+          <span class="mono ${hits ? 'text-warning' : 'text-secondary'}">${hits}</span>
+        </div>`
+    }).join('')
+    const moreRules = rules.length > 4
+      ? `<div class="small text-secondary">${esc(t('dashboard.cfgMoreRules', { n: rules.length - 4 }))}</div>`
+      : ''
+
+    const confBlock = confLines.length
+      ? `<div class="mb-2">
+          ${confLines.map((l) => `
+            <div class="d-flex align-items-start justify-content-between small">
+              <span class="text-secondary me-2">${esc(l.label)}</span>
+              <span class="text-end${l.warn ? ' text-warning' : ''}">${esc(l.value)}</span>
+            </div>`).join('')}
+          ${ruleItems ? `<div class="mt-1 ps-2 border-start">${ruleItems}${moreRules}</div>` : ''}
+        </div>
+        <hr class="my-2">`
+      : `<div class="small text-secondary mb-2">${esc(t('dashboard.cfgNone'))}</div>
+        <hr class="my-2">`
+
+    // ---- 效果计数 ----
     const rows = [
       ['dashboard.delayed', sim.delayed, 'bi-hourglass-split'],
       ['dashboard.throttled', sim.throttled, 'bi-speedometer'],
@@ -189,20 +307,35 @@ export class DashboardView extends View {
       ['dashboard.ranged', sim.ranged, 'bi-arrow-repeat'],
     ]
 
+    // 按状态给提示。三种"看起来都没生效"的原因完全不同，混成一句就等于没说。
+    const hintText = {
+      idle: t('dashboard.cfgIdle'),
+      armed: t('dashboard.cfgArmed'),
+    }[state_]
+    const hint = hintText
+      ? `<div class="alert alert-${state_ === 'idle' ? 'warning' : 'secondary'} py-1 px-2 small mt-2 mb-0">
+          ${esc(hintText)}
+        </div>`
+      : ''
+
     return `
-      <div class="d-flex flex-column gap-2">
-        ${rows.map(([key, value, icon]) => `
+      <div>
+        ${confBlock}
+        <div class="d-flex flex-column gap-2">
+          ${rows.map(([key, value, icon]) => `
+            <div class="d-flex align-items-center justify-content-between">
+              <span class="small">
+                <i class="bi ${icon} me-2 text-secondary"></i>${esc(t(key))}
+              </span>
+              <span class="mono ${value ? 'text-warning' : 'text-secondary'}">${value || 0}</span>
+            </div>`).join('')}
+          <hr class="my-1">
           <div class="d-flex align-items-center justify-content-between">
-            <span class="small">
-              <i class="bi ${icon} me-2 text-secondary"></i>${esc(t(key))}
-            </span>
-            <span class="mono ${value ? 'text-warning' : 'text-secondary'}">${value || 0}</span>
-          </div>`).join('')}
-        <hr class="my-1">
-        <div class="d-flex align-items-center justify-content-between">
-          <span class="small text-secondary">${esc(t('dashboard.throughput'))}</span>
-          <span class="mono">${esc(fmtBytes(throughput ? throughput.totalBytes : 0))}</span>
+            <span class="small text-secondary">${esc(t('dashboard.throughput'))}</span>
+            <span class="mono">${esc(fmtBytes(throughput ? throughput.totalBytes : 0))}</span>
+          </div>
         </div>
+        ${hint}
       </div>`
   }
 
