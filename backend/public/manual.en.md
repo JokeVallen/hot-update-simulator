@@ -58,17 +58,18 @@ remember to add the matching manual file and an entry in the `MANUAL_FILES` whit
 
 ## Using the Panel
 
-Once `http://localhost:5500/` is open (run `npm run build` first), the left sidebar has 9 entries — 8 pages plus an API docs link that opens in a new tab:
+Once `http://localhost:5500/` is open (run `npm run build` first), the left sidebar has 10 entries — 9 pages plus an API docs link that opens in a new tab:
 
 | Page | When to use it |
 |---|---|
 | **Overview** | Start here. Beyond request counts and latency percentiles, the important part is the "Simulation impact" column — it tells you **how many requests the simulator tampered with**. Otherwise a 10-second P95 looks like a backend performance problem when you're the one who dialed the latency up |
-| **Network Simulation** | Tune latency / jitter / bandwidth / packet loss / offline. Changes apply immediately; there is no Save to click |
+| **Network** | Tune latency / jitter / bandwidth / packet loss / offline. Changes apply immediately; there is no Save to click |
 | **Faults** | Add rules. The right-hand side spells out which client capability each of the 8 fault types tests, so you don't have to guess which one to pick |
 | **Presets** | The most used page. 17 scenarios, one click each; most of the time you never tune parameters by hand |
 | **Live Logs** | Every request is tagged with what was done to it: `abort`, `+300ms`, `100Kbps`, `Range`… Requests that were killed show "Dropped" in the status column |
 | **API Console** | Verify on the spot: call `/api/version` once and see whether the timing really changed |
 | **Favorites** | Save frequently used requests and replay them over and over. Replay is issued by the server, so it goes through the simulator in full |
+| **Assets** | Lays out how the bundles actually sit on disk: which platforms exist, which channels each has, and what the resource and code tracks contain. Start here when asking "did I put the files in the right place?" |
 | **Manual** | This file, rendered inside the panel with a table of contents |
 | **API Docs** | Sidebar item that opens Swagger UI in a new tab |
 

@@ -12,7 +12,26 @@
     "explorer": "接口调试",
     "favorites": "收藏",
     "manual": "使用手册",
-    "apiDocs": "API 文档"
+    "apiDocs": "API 文档",
+    "assets": "资产目录"
+  },
+  "assets": {
+    "title": "资产目录",
+    "intro": "热更包在磁盘上的实际布局：有哪些平台、各有哪些渠道、资源轨道与代码轨道分别装了什么。数据来自已有的接口，按需加载。",
+    "root": "资产根目录",
+    "rootUnknown": "（未报告）",
+    "channelsConfigured": "配置里声明的渠道名：{channels}（只有出现在这里面的名字才会被当成渠道目录）",
+    "empty": "一个平台都没有",
+    "emptyHint": "把热更包放到上面的资产根目录下，或跑一次 npm run sample 生成示例包。",
+    "resourceTrack": "资源",
+    "codeTrack": "代码",
+    "codeTrackNone": "无",
+    "fileCounts": "{files} 个资源 / {code} 个代码文件",
+    "noChannels": "没有渠道目录",
+    "flatLayout": "平铺布局：整个平台目录就是默认渠道",
+    "trackAbsent": "没有这条轨道",
+    "trackEmpty": "轨道存在但没有文件",
+    "filesUnit": "个文件"
   },
   "theme": {
     "label": "主题",
@@ -41,6 +60,10 @@
     "actions": "操作",
     "none": "暂无数据",
     "loading": "加载中…",
+    "copy": "复制",
+    "copyFailed": "复制失败（浏览器可能不允许写入剪贴板）",
+    "expand": "展开",
+    "collapse": "收起",
     "search": "搜索",
     "confirmDelete": "确定要删除吗？此操作不可撤销。",
     "seconds": "秒",

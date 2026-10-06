@@ -33,6 +33,7 @@ import { LogsView } from './views/logs.js'
 import { ExplorerView } from './views/explorer.js'
 import { FavoritesView } from './views/favorites.js'
 import { ManualView } from './views/manual.js'
+import { AssetsView } from './views/assets.js'
 
 const ROUTES = {
   dashboard: DashboardView,
@@ -42,6 +43,7 @@ const ROUTES = {
   logs: LogsView,
   explorer: ExplorerView,
   favorites: FavoritesView,
+  assets: AssetsView,
   manual: ManualView,
 }
 

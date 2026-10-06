@@ -12,7 +12,26 @@
     "explorer": "API Console",
     "favorites": "Favorites",
     "manual": "Manual",
-    "apiDocs": "API Docs"
+    "apiDocs": "API Docs",
+    "assets": "Assets"
+  },
+  "assets": {
+    "title": "Asset directory",
+    "intro": "How the hot-update bundles actually sit on disk: which platforms exist, which channels each has, and what the resource and code tracks contain. Built from existing endpoints, loaded on demand.",
+    "root": "Asset root",
+    "rootUnknown": "(not reported)",
+    "channelsConfigured": "Channel names declared in the config: {channels} (only names listed here count as channel directories)",
+    "empty": "No platforms at all",
+    "emptyHint": "Drop hot-update bundles into the asset root above, or run npm run sample to generate sample ones.",
+    "resourceTrack": "Resource",
+    "codeTrack": "Code",
+    "codeTrackNone": "none",
+    "fileCounts": "{files} resource / {code} code files",
+    "noChannels": "no channel directory",
+    "flatLayout": "flat layout: the whole platform directory is the default channel",
+    "trackAbsent": "this track does not exist",
+    "trackEmpty": "the track exists but has no files",
+    "filesUnit": "files"
   },
   "theme": {
     "label": "Theme",
@@ -41,6 +60,10 @@
     "actions": "Actions",
     "none": "No data",
     "loading": "Loading…",
+    "copy": "Copy",
+    "copyFailed": "Copy failed (the browser may not allow clipboard writes)",
+    "expand": "Expand",
+    "collapse": "Collapse",
     "search": "Search",
     "confirmDelete": "Delete this? This cannot be undone.",
     "seconds": "s",

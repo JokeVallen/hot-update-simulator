@@ -187,12 +187,24 @@ function main() {
     '（按叶子名匹配，因为手册以 JSONC 示例给出配置）');
   missed += report('故障类型', faultTypes, coveredZh);
 
-  // 面板页面：用界面上的名称去匹配
+  // 面板页面：要求手册的页面表里**有以它命名的一行**。
+  //
+  // 这里原来只是"名字在全文里出现过"，会产生**假通过** ——
+  // 加「资产目录」这一页时，"资产目录"三个字早就散落在别处
+  // （/api/system 的说明、curl 注释、只读说明），于是检查报告"已覆盖"，
+  // 而页面表里根本没有这一行。
+  // 手册的页面表固定写成 `| **总览** | 说明 |`，所以按这个形状匹配，
+  // 才算真的写进去了。
   const labels = panelLabels();
   const pages = panelRoutes.filter((r) => labels.zh[r]);
-  missed += report('面板页面', pages.map((r) => labels.zh[r]), (label) => coveredZh(label),
-    '（用界面名称匹配）');
-  const pagesEnMissing = pages.filter((r) => !coveredEn(labels.en[r]));
+  const asTableRow = (label) => new RegExp(`^\\|\\s*\\*\\*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\*\\*\\s*\\|`, 'm');
+  missed += report(
+    '面板页面',
+    pages.map((r) => labels.zh[r]),
+    (label) => asTableRow(label).test(zh),
+    '（要求在页面表里有 `| **名称** |` 这一行）',
+  );
+  const pagesEnMissing = pages.filter((r) => !asTableRow(labels.en[r]).test(en));
   console.log(`      英文手册未覆盖的页面名: ${pagesEnMissing.length ? pagesEnMissing.map((r) => labels.en[r]).join(', ') : '无'}`);
 
   missed += report('npm 脚本', scripts, coveredZh);

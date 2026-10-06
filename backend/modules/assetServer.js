@@ -87,7 +87,13 @@ class AssetServer {
    * 如果直接拼进去，用 ../../ 就能读到项目里的任何文件
    * （包括 .env 里的密钥）。
    *
-   * @returns {string|null} 绝对路径；越界或含非法字符时返回 null
+   * ⚠️ 光做字符串判断**不够**：目录里放一个符号链接/junction 指向外面，
+   * 字符串上它还在根目录内，但 fs 会跟着链接跑出去。实测过：
+   *   storage/assets/Android/escape → C:\somewhere\else   （junction）
+   *   GET /assets/Android/escape/secret.txt  → 200，读到了根目录之外的内容
+   * 所以字符串检查通过之后还要解析真实路径再校验一次。
+   *
+   * @returns {string|null} 绝对路径；越界、含非法字符、或解析后跑到根外时返回 null
    */
   safeResolve(root, segment) {
     if (!segment) return null;
@@ -105,7 +111,48 @@ class AssetServer {
     const rel = path.relative(root, target);
     if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
 
-    return target;
+    // 第一层：字符串上在根目录内。
+    // 第二层：把它（或它最近的已存在祖先）解析成真实路径，确认没被链接带出去。
+    return AssetServer.staysInside(root, target) ? target : null;
+  }
+
+  /**
+   * 目标解析符号链接之后，是否仍落在 root 的真实路径之内。
+   *
+   * 为什么无需担心"往上找祖先"的开销：
+   *   要发出去的文件**必然存在**，于是 realpathSync(target) 一次就成功，
+   *   只花一次系统调用。向上回溯只在目标不存在时发生，而那种情况随后就会 404，
+   *   纯粹是防御性的。
+   *   回溯限制层数是为了挡住"用极深的不存在路径逼出上千次 syscall"的骚扰。
+   *
+   * @returns {boolean}
+   */
+  static staysInside(root, target) {
+    let realRoot;
+    try {
+      realRoot = fs.realpathSync(root);
+    } catch {
+      return false; // 根目录都不存在，谈不上"在里面"
+    }
+
+    let probe = target;
+    for (let depth = 0; depth < 8; depth += 1) {
+      let real;
+      try {
+        real = fs.realpathSync(probe);
+      } catch {
+        const parent = path.dirname(probe);
+        if (parent === probe) return false; // 已经到文件系统根部
+        probe = parent;
+        continue;
+      }
+      // probe 可能只是目标的一个祖先，把剩下的相对部分接回去
+      const rest = path.relative(probe, target);
+      const full = rest ? path.resolve(real, rest) : real;
+      const rel = path.relative(realRoot, full);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    }
+    return false;
   }
 
   /** 列出所有可用平台（资产根目录下的一级子目录）。 */

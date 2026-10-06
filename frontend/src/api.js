@@ -136,7 +136,17 @@ export const api = {
   // 热更业务
   platforms: () => json('/api/platforms'),
   version: (params) => json(`/api/version?${new URLSearchParams(params)}`),
-  manifest: (platform) => json(`/api/manifest?platform=${encodeURIComponent(platform)}`),
+  /**
+   * 取清单。
+   * @param {string} platform
+   * @param {{channel?:string, track?:'resource'|'code'}} [opts]
+   */
+  manifest: (platform, opts = {}) => {
+    const q = new URLSearchParams({ platform: String(platform) })
+    if (opts.channel) q.set('channel', String(opts.channel))
+    if (opts.track) q.set('track', String(opts.track))
+    return json(`/api/manifest?${q.toString()}`)
+  },
   check: (params) => json(`/api/check?${new URLSearchParams(params)}`),
   refreshManifest: (platform) =>
     json(`/api/manifest/refresh${platform ? `?platform=${encodeURIComponent(platform)}` : ''}`, { method: 'POST' }),

@@ -635,6 +635,62 @@ async function testAssetEdgeCases() {
     fs.writeFileSync(emptyFile, Buffer.alloc(0));
     fs.writeFileSync(normalFile, Buffer.alloc(100000, 3));
 
+    // ---------------- 符号链接越界 ----------------
+    //
+    // safeResolve 原来只做字符串判断（path.resolve + path.relative），
+    // 于是目录里放一个 junction 指向外面就能读到资产目录之外的文件：
+    // 字符串上它还在根目录内，但 fs 会跟着链接跑出去。
+    //
+    // 实测过修复前的行为：GET /assets/X/escape/secret.txt → 200 + 目录外的内容。
+    // 这里用真 junction 复现，确保它一直是被拦住的。
+    section('符号链接越界防护');
+
+    const outsideDir = path.join(os.tmpdir(), `hus-outside-${process.pid}`);
+    const linkName = 'escape-link';
+    const linkPath = path.join(probeDir, linkName);
+    let junctionMade = false;
+    try {
+      fs.mkdirSync(outsideDir, { recursive: true });
+      fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'OUTSIDE-CONTENT-MARKER');
+      // Windows 的 junction 不需要管理员权限；其他平台用普通符号链接
+      if (process.platform === 'win32') {
+        execFileSync('cmd', ['/c', 'mklink', '/J', linkPath, outsideDir], { stdio: 'pipe' });
+      } else {
+        fs.symlinkSync(outsideDir, linkPath, 'dir');
+      }
+      junctionMade = true;
+    } catch {
+      // 建不了链接（权限/文件系统不支持）就跳过，别让整套测试挂掉
+    }
+
+    if (junctionMade) {
+      const viaLink = await request(port, `/assets/RegressionProbe/${linkName}/secret.txt`);
+      check('穿过符号链接读资产目录之外的内容会被拦住',
+        viaLink.status !== 200 || !viaLink.body.toString().includes('OUTSIDE-CONTENT-MARKER'),
+        `状态 ${viaLink.status} —— 200 且带 OUTSIDE-CONTENT-MARKER 就是越界了`);
+
+      // 同一路径走清单也不该把链接里的文件列进来
+      app.locals.assetServer.invalidateManifest();
+      const linkManifest = JSON.parse(
+        (await request(port, '/api/manifest?platform=RegressionProbe')).body.toString(),
+      );
+      check('符号链接里的文件不会出现在清单里',
+        !linkManifest.files.some((f) => f.path.startsWith(`${linkName}/`)),
+        linkManifest.files.map((f) => f.path).join(', '));
+
+      try {
+        fs.rmSync(linkPath, { recursive: true, force: true });
+      } catch { /* 忽略 */ }
+    } else {
+      console.log('  · 无法创建符号链接（权限或文件系统不支持），这项检查跳过');
+    }
+
+    // 正常文件不能因为这个修复而读不到
+    const stillOk = await request(port, '/assets/RegressionProbe/normal.bin');
+    check('修复没有误伤正常文件（修补越界不能把功能修坏）',
+      stillOk.status === 200 && stillOk.body.length === 100000,
+      `状态 ${stillOk.status}, ${stillOk.body.length} 字节`);
+
     // ---------------- 0 字节文件 ----------------
     const empty = await request(port, '/assets/RegressionProbe/empty.bin');
     check('0 字节文件返回 200 而不是 500',
