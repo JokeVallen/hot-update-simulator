@@ -22,6 +22,7 @@
 //   npm run release -- --skip-build   # 不重新构建前端（用现有 dist）
 
 const { execFileSync } = require('child_process');
+const { exitAfterFlush } = require('./lib/exit');
 const fs = require('fs');
 const path = require('path');
 const { removeDirSync } = require('./lib/safe-rm');
@@ -76,7 +77,7 @@ function main() {
   } catch (err) {
     console.error(String(err.stdout || '').trim());
     console.error('\n版本检查没过，拒绝打包。');
-    process.exit(1);
+    exitAfterFlush(1);
   }
 
   // ---- 1. 工作区必须干净 ----
@@ -87,7 +88,7 @@ function main() {
     console.error('工作区不干净，拒绝打包：\n');
     console.error(dirty.split('\n').map((l) => `  ${l}`).join('\n'));
     console.error('\n先提交，或者用 --force 强制打包（会在 RELEASE.txt 里标注 dirty）。');
-    process.exit(1);
+    exitAfterFlush(1);
   }
   const commit = git('rev-parse', '--short', 'HEAD');
   console.log(`  提交     ${commit}${dirty ? '  ⚠️ 工作区脏（--force）' : ''}`);
@@ -100,7 +101,7 @@ function main() {
   const dist = path.join(ROOT, 'dist');
   if (!fs.existsSync(dist)) {
     console.error('\n找不到 dist/。先跑 npm run build，或去掉 --skip-build。');
-    process.exit(1);
+    exitAfterFlush(1);
   }
 
   // ---- 3. 铺开临时目录 ----

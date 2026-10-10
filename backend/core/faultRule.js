@@ -166,15 +166,27 @@ function platformFromUrl(url) {
 }
 
 /**
- * 生成一条规则的稳定标识，用于命中计数。
+ * 生成一条规则的命中计数键。
  *
- * 为什么不用 `rule.id`：id 由调用方提供，可以重复。两条不同规则共用
- * 一个 id 时，它们的 maxHits 配额会被互相消耗（实测：第一条用掉配额后，
- * 第二条本应无限触发的规则也跟着失效）。加上下标就能区分。
+ * 优先用 id 本身：id 唯一时它就是稳定的身份，**规则顺序变化不会让计数错配**。
+ *
+ * 原实现无条件拼上下标（`${id}#${index}`），由此引出两个 bug：
+ *   1. DELETE 是用裸 id 去清计数的，键里带着下标所以永远清不掉 ——
+ *      "删掉再重建同 id 的规则"会继承旧计数，新规则一出生就 maxHits 用尽、
+ *      静默不触发（清单 H-2）
+ *   2. 删掉前面一条规则会让后面所有规则的键整体前移，命中计数全部归零
+ *
+ * 只在 id **重复**时才退回带下标的形式：那种情况下必须保证两条规则各有独立
+ * 配额，不能互相消耗（这是当初加下标的理由，仍然成立）。
+ * 重复 id 现在会被 POST 拒绝，所以这条路径只可能来自手工编辑的 config.json。
+ *
+ * @param {object} rule
+ * @param {number} index
+ * @param {boolean} idIsUnique 同一批规则里这个 id 是否唯一
  */
-function ruleKey(rule, index) {
-  const id = rule && rule.id ? String(rule.id) : 'rule';
-  return `${id}#${index}`;
+function ruleKey(rule, index, idIsUnique = true) {
+  const id = rule && rule.id ? String(rule.id) : `rule${index}`;
+  return idIsUnique ? id : `${id}#${index}`;
 }
 
 /**
@@ -279,12 +291,22 @@ function normalizeRules(input) {
  * 只在规则集合变化时调用一次，之后匹配就是纯函数调用。
  */
 function compileRules(rules) {
-  return (rules || []).map((rule, index) => {
+  const list = rules || [];
+  // 先数一遍 id 出现次数，决定每条规则该用哪种键
+  const idCount = new Map();
+  for (const r of list) {
+    const id = r && r.id ? String(r.id) : '';
+    if (id) idCount.set(id, (idCount.get(id) || 0) + 1);
+  }
+
+  return list.map((rule, index) => {
     const { test, methods, platforms } = compileMatcher(rule.match || {});
+    const id = rule && rule.id ? String(rule.id) : '';
+    const unique = Boolean(id) && idCount.get(id) === 1;
     return {
       rule,
       index,
-      key: ruleKey(rule, index),
+      key: ruleKey(rule, index, unique),
       methods,
       platforms,
       globs: toList((rule.match || {}).pathGlob),

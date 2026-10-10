@@ -279,16 +279,17 @@ So every hot-update response carries:
 
 ```jsonc
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "capabilities": [
     "codeTrack",          // code hot-update track is available
     "rangeResume",        // assets support Range resume
     "conditionalCache",   // ETag conditional requests (304) are supported
     "hashMatchesEtag",    // the ETag is the manifest hash (see below)
     "manifestPinning",    // manifests can be pinned to eliminate races
-    "grayByDeviceId",     // gray release by deviceId percentage
     "multiAlgorithmHash", // entries carry the algorithm name and multiple digests
-    "gzip"                // JSON responses may be gzipped
+    "gzip",               // JSON responses may be gzipped
+    "channelContent",     // channels actually affect content (since protocol 2)
+    "grayRules"           // gray release supports a rule list (since protocol 2)
   ]
 }
 ```

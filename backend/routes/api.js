@@ -201,7 +201,7 @@ function evaluateGrayRules(gray, ctx) {
  * "没检查"和"检查通过"是两件不同的事 —— 客户端必须能区分，
  * 否则一个没传 appVersion 的旧客户端会被误告知"兼容"。
  */
-function buildCodeDecision({ code, query, appVersion }) {
+function buildCodeDecision({ code, query, appVersion, channel, manifestId }) {
   if (!code) return null;
 
   const codeCurrent = query.codeCurrent ? String(query.codeCurrent) : null;
@@ -233,7 +233,9 @@ function buildCodeDecision({ code, query, appVersion }) {
     dir: code.dir,
     fileCount: code.fileCount,
     totalSize: code.totalSize,
-    manifestUrl: `/api/manifest?platform=${encodeURIComponent(code.platform)}&track=code`,
+    manifestUrl: `/api/manifest?platform=${encodeURIComponent(code.platform)}`
+      + `&channel=${encodeURIComponent(channel)}&track=code`
+      + `&expectId=${encodeURIComponent(manifestId || '')}`,
   };
 }
 
@@ -288,7 +290,17 @@ function buildVersionDecision({ manifest, query, hotUpdate }) {
       + `&channel=${encodeURIComponent(channel)}&expectId=${encodeURIComponent(manifest.manifestId || '')}`,
     generatedAt: manifest.generatedAt,
     // 代码热更轨道；平台没配 code 块时为 null（客户端据此知道这个平台没有代码热更）
-    code: buildCodeDecision({ code: manifest.code, query, appVersion }),
+    code: buildCodeDecision({
+      code: manifest.code,
+      query,
+      appVersion,
+      // 渠道必须带上：2.0.0 起渠道决定读哪个目录，漏了会让 beta 用户
+      // 照着这个 URL 拿到正式渠道的代码包 —— 而且不报错。
+      channel,
+      // 清单身份：manifestId 覆盖资源文件、代码文件、代码元信息、渠道与版本，
+      // 所以代码轨道复用它是正确的，不需要单独的身份。
+      manifestId: manifest.manifestId,
+    }),
     // 灰度结果。命中与否都给出，并把命中的是哪条规则一并告知 ——
     // "为什么我没进灰度"是最常见的问题，不给依据就只能靠猜。
     ...(gray

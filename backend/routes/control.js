@@ -159,6 +159,17 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
       return res.status(400).json({ error: normalized.reason });
     }
 
+    // 重复 id 必须拒绝。允许的话会出现两条同 id 规则，而匹配语义是
+    // "第一条合格的决定" —— 于是新加的那条被前面的挡住、静默失效，
+    // 而界面和列表里两条看起来都好好的。这是"配了却不生效"的经典成因。
+    if (existing.some((r) => r && String(r.id) === String(normalized.rule.id))) {
+      return res.status(409).json({
+        error: `已存在同 id 的规则：${normalized.rule.id}`,
+        hint: `想改它就用 PUT /api/control/fault/rules/${encodeURIComponent(normalized.rule.id)}，`
+          + '或者换个 id、先删掉旧的。',
+      });
+    }
+
     const rules = [...existing, normalized.rule];
     const cfg = configManager.patch({ fault: { rules } });
 
@@ -228,7 +239,9 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
       return res.status(404).json({ error: `规则不存在：${req.params.id}` });
     }
     configManager.patch({ fault: { rules: next } });
-    faultInjector.resetHitCount(req.params.id);
+    // 用「按 id 清全部」而不是 resetHitCount(id)：后者的键是裸 id，
+    // 清不掉重复 id 那种带下标的键，残留的计数会让重建的同名规则一出生就失效。
+    faultInjector.resetHitCountsForId(req.params.id);
     return res.json({ ok: true, removed: req.params.id });
   });
 

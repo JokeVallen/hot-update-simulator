@@ -14,6 +14,7 @@
 // 用法：npm run docs-check
 
 const fs = require('fs');
+const { exitAfterFlush } = require('./lib/exit');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -158,7 +159,7 @@ function main() {
   for (const [lang, file] of Object.entries(MANUALS)) {
     if (!fs.existsSync(file)) {
       console.error(`缺少手册文件：${file}`);
-      process.exit(2);
+      exitAfterFlush(2);
     }
     manuals[lang] = read(file);
   }
@@ -214,6 +215,50 @@ function main() {
   console.log(`\n${presetCovered.length >= 3 ? '✓' : '✗'} 预置方案  共 ${presets.length} 个，`
     + `手册里点名了 ${presetCovered.length} 个：${presetCovered.map((p) => p.name).join('、')}`);
 
+  // 协议段落里的**值**必须和代码一致。
+  //
+  // 为什么单独查这个：上面的检查全都是"名字有没有被提到"，不看值。
+  // 于是手册里的 protocolVersion 从 1.1.0 起就一直写着 1（实际早已是 2），
+  // capabilities 示例也多了一个已删除的 grayByDeviceId、少了协议 2 新增的两项 ——
+  // 而 docs-check 一直报"全部覆盖"。清单 M-1 就是这么漏掉的。
+  //
+  // 注意 missed 是**计数器**（missed += report(...)），不是数组。
+  // 初版这里写成 missed.push(...)，结果值正确时静默通过、
+  // 值错误时直接 TypeError 崩掉 —— 恰恰在最该报错的时候不报错。
+  {
+    const proto = require('../backend/core/protocol');
+    const bad = [];
+    for (const [label, text] of [['中文', zh], ['英文', en]]) {
+      const verMatch = text.match(/"protocolVersion"\s*:\s*(\d+)/);
+      const capMatch = text.match(/"capabilities"\s*:\s*\[([\s\S]*?)\n\s*\]/);
+      const caps = capMatch
+        ? [...capMatch[1].matchAll(/"([A-Za-z][A-Za-z0-9]*)"/g)].map((m) => m[1])
+        : [];
+
+      const verOk = Boolean(verMatch) && Number(verMatch[1]) === proto.PROTOCOL_VERSION;
+      const missing = proto.CAPABILITIES.filter((c) => !caps.includes(c));
+      const extra = caps.filter((c) => !proto.CAPABILITIES.includes(c));
+      const capsOk = Boolean(capMatch) && missing.length === 0 && extra.length === 0;
+
+      if (!verOk) bad.push(`${label}手册的 protocolVersion（写的是 ${verMatch ? verMatch[1] : '没写'}，代码是 ${proto.PROTOCOL_VERSION}）`);
+      if (!capsOk) {
+        bad.push(`${label}手册的 capabilities（${caps.length} 项 vs 代码 ${proto.CAPABILITIES.length} 项`
+          + `${missing.length ? `，缺 ${missing.join('/')}` : ''}`
+          + `${extra.length ? `，多 ${extra.join('/')}` : ''}）`);
+      }
+
+      console.log(`\n${verOk ? '✓' : '✗'} ${label}手册的协议版本  `
+        + `${verMatch ? verMatch[1] : '(没写)'} vs 代码 ${proto.PROTOCOL_VERSION}`);
+      console.log(`  ${capsOk ? '✓' : '✗'} ${label}手册的能力位  `
+        + `${caps.length} 项 / 代码 ${proto.CAPABILITIES.length} 项`);
+    }
+    if (bad.length) {
+      console.log('\n✗ 协议段落的值与代码不一致（手册里写死的值会过期，改代码时记得同步）');
+      for (const b of bad) console.log(`      不一致: ${b}`);
+    }
+    missed += bad.length;
+  }
+
   // 英文手册的覆盖度（作为翻译完整性的旁证）
   const enMissing = endpoints.filter((p) => !coveredEn(p));
   console.log(`\n${enMissing.length ? '✗' : '✓'} 英文手册的接口覆盖  未覆盖 ${enMissing.length} 项`
@@ -241,7 +286,7 @@ function main() {
   }
   console.log('');
 
-  process.exit(totalGaps === 0 && presetCovered.length >= 3 ? 0 : 1);
+  exitAfterFlush(totalGaps === 0 && presetCovered.length >= 3 ? 0 : 1);
 }
 
 main();

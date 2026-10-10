@@ -15,6 +15,7 @@
 // 用法：npm run arch
 
 const fs = require('fs');
+const { exitAfterFlush } = require('./lib/exit');
 const path = require('path');
 const { performance } = require('perf_hooks');
 
@@ -328,7 +329,7 @@ function main() {
     : '结论：结构问题见上。');
   console.log('');
 
-  process.exit(healthy ? 0 : 1);
+  exitAfterFlush(healthy ? 0 : 1);
 }
 
 main();

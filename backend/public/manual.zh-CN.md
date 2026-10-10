@@ -273,16 +273,17 @@ curl "http://localhost:5500/api/version?platform=Android&current=1.5.0&codeCurre
 
 ```jsonc
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "capabilities": [
     "codeTrack",          // 支持代码热更轨道
     "rangeResume",        // 资产支持 Range 断点续传
     "conditionalCache",   // 支持 ETag 条件请求（304）
     "hashMatchesEtag",    // ETag 与清单 hash 是同一个值（见下）
     "manifestPinning",    // 清单可固定版本，用于消除竞态
-    "grayByDeviceId",     // 灰度支持 deviceId 百分比
     "multiAlgorithmHash", // 清单同时给出算法名与多算法摘要
-    "gzip"                // JSON 响应可能被 gzip
+    "gzip",               // JSON 响应可能被 gzip
+    "channelContent",     // 渠道真正影响内容（协议 2 起）
+    "grayRules"           // 灰度支持规则列表（协议 2 起）
   ]
 }
 ```

@@ -16,6 +16,7 @@
 //   node scripts/ui-check.js http://127.0.0.1:5500
 
 const { spawn } = require('child_process');
+const { exitAfterFlush } = require('./lib/exit');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -103,7 +104,7 @@ async function main() {
   const browser = findBrowser();
   if (!browser) {
     console.error('找不到 Chrome 或 Edge，无法做界面检查。');
-    process.exit(2);
+    exitAfterFlush(2);
   }
 
   // 界面检查会点「急停」等按钮，那些操作会真的写进 backend/config.json。
@@ -132,7 +133,7 @@ async function main() {
   } catch (err) {
     console.error(`目标服务 ${TARGET_URL} 不可达：${err.message}`);
     console.error('请先执行 npm start（并确认后端已在 5500 端口运行）。');
-    process.exit(2);
+    exitAfterFlush(2);
   }
 
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hus-ui-check-'));
@@ -199,7 +200,7 @@ async function main() {
   } catch (err) {
     console.error('连接浏览器失败：', err.message);
     cleanup();
-    process.exit(1);
+    exitAfterFlush(1);
   }
 
   try {
@@ -704,7 +705,7 @@ async function main() {
 
     cleanup();
     const allGood = passed === ROUTES.length && uniqueProblems.length === 0 && localeOk;
-    process.exit(allGood ? 0 : 1);
+    exitAfterFlush(allGood ? 0 : 1);
   } catch (err) {
     console.error('\n界面检查自身出错：', err.message);
     if (problems.length) {
@@ -712,7 +713,7 @@ async function main() {
       for (const p of [...new Set(problems)]) console.error(`  - ${p}`);
     }
     cleanup();
-    process.exit(1);
+    exitAfterFlush(1);
   }
 }
 

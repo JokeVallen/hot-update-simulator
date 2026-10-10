@@ -13,6 +13,7 @@
 
 const http = require('http');
 
+const { exitAfterFlush } = require('./lib/exit');
 const port = 5641;
 process.env.PORT = String(port);
 const app = require('../backend/app');
@@ -132,7 +133,7 @@ async function main() {
   console.log(`结束时完整下载: ${asset.status}, ${asset.bytes} 字节, err=${asset.err}`);
 
   server.close();
-  process.exit(0);
+  exitAfterFlush(0);
 }
 
 main();

@@ -20,6 +20,7 @@
 //   npm run bump minor        # 或者给 patch|minor|major，自动推算
 
 const fs = require('fs');
+const { exitAfterFlush } = require('./lib/exit');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -59,7 +60,7 @@ const arg = String(process.argv[2] || '').trim();
 if (!arg) {
   console.error('用法：npm run bump <版本号|patch|minor|major>');
   console.error(`当前版本：${current}`);
-  process.exit(1);
+  exitAfterFlush(1);
 }
 
 // ---- 算出目标版本 ----
@@ -77,11 +78,11 @@ if (['patch', 'minor', 'major'].includes(arg)) {
 const nextParsed = parse(next);
 if (!nextParsed) {
   console.error(`"${arg}" 不是合法的版本号。应当形如 1.2.3 或 1.2.3-beta.1`);
-  process.exit(1);
+  exitAfterFlush(1);
 }
 if (compare(nextParsed, currentParsed) <= 0) {
   console.error(`新版本号必须大于当前版本：${next} <= ${current}`);
-  process.exit(1);
+  exitAfterFlush(1);
 }
 
 console.log(`版本号：${current} → ${next}\n`);
@@ -92,7 +93,7 @@ function bumpPkg(file, label) {
   const updated = raw.replace(/("version"\s*:\s*")[^"]*(")/, `$1${next}$2`);
   if (updated === raw) {
     console.error(`  ✗ ${label} 里没找到 version 字段，没有改动`);
-    process.exit(1);
+    exitAfterFlush(1);
   }
   fs.writeFileSync(file, updated, 'utf8');
   console.log(`  ✓ ${label} → ${next}`);
@@ -139,7 +140,7 @@ try {
     { cwd: ROOT, stdio: 'inherit' });
 } catch {
   console.error('\n版本检查没过。把 CHANGELOG 里空的小节填上内容再试。');
-  process.exit(1);
+  exitAfterFlush(1);
 }
 
 console.log('\n接下来：');

@@ -29,7 +29,8 @@ const { execFileSync } = require('child_process');
 const express = require('express');
 // 不能用 fs.rmSync 删目录：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
 // 详见 scripts/lib/safe-rm.js 的说明。
-const { removeDir } = require('./lib/safe-rm');
+const { removeDir, removeDirSync } = require('./lib/safe-rm');
+const { exitAfterFlush } = require('./lib/exit');
 
 const CONFIG_PATH = path.resolve(__dirname, '..', 'backend', 'config.json');
 // 必须和服务器用同一个存储根，否则设了 HOT_UPDATE_STORAGE 之后，
@@ -679,7 +680,10 @@ async function testAssetEdgeCases() {
         linkManifest.files.map((f) => f.path).join(', '));
 
       try {
-        fs.rmSync(linkPath, { recursive: true, force: true });
+        // 用 safe-rm 而不是 fs.rmSync：后者在 Windows + 非 ASCII 路径上会静默失败，
+        // 纯中文路径上甚至让 Node 硬崩（0xC0000409，try/catch 抓不住）。
+        // 这里删的虽然是 ASCII 路径，但别给人留下可以照抄的错误范例。
+        removeDirSync(linkPath);
       } catch { /* 忽略 */ }
     } else {
       console.log('  · 无法创建符号链接（权限或文件系统不支持），这项检查跳过');
@@ -837,6 +841,92 @@ async function testAssetEdgeCases() {
     });
     check('只改 enabled 仍然正常（400 不能误伤正常用法）',
       enabledOnly.status === 200, `状态 ${enabledOnly.status}`);
+    await clearFaults(port);
+
+    // ---------------- 命中计数器必须跟着规则走（清单 H-2 / H-3） ----------------
+    //
+    // 这两个凑在一起特别迷惑：重复 id 让新规则被前面的挡住，
+    // 残留的计数又让它"一出生就 maxHits 用尽"。两种都是**静默失效** ——
+    // 客户端那边只表现为"故障没触发"，人会先去怀疑客户端和网络。
+    section('故障规则的计数与身份');
+
+    const mkRule = (id, extra = {}) => ({
+      id, enabled: true, probability: 1,
+      match: { pathPrefix: '/api/version' }, action: { type: 'status', status: 500 }, ...extra,
+    });
+
+    // ---- 重复 id 必须 409 ----
+    await clearFaults(port);
+    const dupFirst = await postJson(port, '/api/control/fault/rules', mkRule('dup-id-probe'));
+    const dupSecond = await postJson(port, '/api/control/fault/rules', mkRule('dup-id-probe'));
+    check('首次新增规则返回 201', dupFirst.status === 201, `状态 ${dupFirst.status}`);
+    check('重复 id 第二次新增返回 409（否则第二条会被第一条挡住、静默失效）',
+      dupSecond.status === 409, `状态 ${dupSecond.status}`);
+    if (dupSecond.status === 409) {
+      check('409 里指明可以改用 PUT 更新',
+        String(JSON.parse(dupSecond.body.toString()).hint || '').includes('/api/control/fault/rules/'),
+        JSON.parse(dupSecond.body.toString()).hint);
+    }
+    const afterDup = JSON.parse((await request(port, '/api/control/fault/rules')).body.toString()).rules;
+    check('服务器上只留下一条该 id 的规则',
+      afterDup.filter((r) => r.id === 'dup-id-probe').length === 1,
+      `${afterDup.filter((r) => r.id === 'dup-id-probe').length} 条`);
+
+    // ---- 删掉再重建，计数必须归零且规则真的会触发 ----
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', mkRule('h2-probe', { maxHits: 2 }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    for (let i = 0; i < 3; i += 1) await request(port, '/api/version?platform=Android&current=1.0.0');
+
+    const hitRule = JSON.parse((await request(port, '/api/control/fault/rules')).body.toString())
+      .rules.find((r) => r.id === 'h2-probe');
+    check('规则触发到上限后计数等于 maxHits 且不再生效',
+      hitRule.hits === 2 && hitRule.effective === false,
+      `hits=${hitRule.hits} effective=${hitRule.effective}`);
+
+    await request(port, '/api/control/fault/rules/h2-probe', { method: 'DELETE' });
+    await postJson(port, '/api/control/fault/rules', mkRule('h2-probe', { maxHits: 2 }));
+    const rebuilt = JSON.parse((await request(port, '/api/control/fault/rules')).body.toString())
+      .rules.find((r) => r.id === 'h2-probe');
+    check('删掉再重建同 id 的规则时计数归零（残留会让新规则一出生就失效）',
+      rebuilt.hits === 0 && rebuilt.effective === true,
+      `hits=${rebuilt.hits} effective=${rebuilt.effective}`);
+
+    const rebuiltHit = await request(port, '/api/version?platform=Android&current=1.0.0');
+    check('重建的规则确实会触发（实测拿到 500，而不是静默放行）',
+      rebuiltHit.status === 500, `状态 ${rebuiltHit.status}`);
+
+    // ---- 删掉前面的规则不能让后面的计数错配 ----
+    //
+    // 计数键原先是 `${id}#${index}`，删掉前面一条会让后面所有规则的下标前移、
+    // 计数全部归零。改用 id 本身作键之后就不会了。
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', {
+      id: 'reorder-first', enabled: true, probability: 1,
+      match: { pathPrefix: '/api/definitely-not-a-real-path' },
+      action: { type: 'status', status: 500 },
+    });
+    await postJson(port, '/api/control/fault/rules', mkRule('reorder-second'));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    await request(port, '/api/version?platform=Android&current=1.0.0');
+    const countBefore = JSON.parse((await request(port, '/api/control/fault/rules')).body.toString())
+      .rules.find((r) => r.id === 'reorder-second').hits;
+
+    await request(port, '/api/control/fault/rules/reorder-first', { method: 'DELETE' });
+    const countAfter = JSON.parse((await request(port, '/api/control/fault/rules')).body.toString())
+      .rules.find((r) => r.id === 'reorder-second').hits;
+    check('删掉前面的规则不会让后面的命中计数归零',
+      countBefore > 0 && countAfter === countBefore,
+      `删除前 ${countBefore} → 删除后 ${countAfter}`);
+
     await clearFaults(port);
 
     // ---------------- 模拟范围：不能把控制面板自己搞坏 ----------------
@@ -1053,6 +1143,36 @@ async function testAssetEdgeCases() {
       check('dll 能正常下载，字节数正确',
         dllDl.status === 200 && dllDl.body.length === 1024,
         `状态 ${dllDl.status}, ${dllDl.body.length} 字节`);
+
+      // ---- 代码轨道的 manifestUrl 必须是「拿起来就能用」的（清单 H-1）----
+      //
+      // 原来它只带 platform 和 track=code。2.0.0 起渠道决定读哪个目录，
+      // 于是客户端照这个 URL 取清单**永远拿到默认渠道的代码包** ——
+      // beta 用户下到正式渠道的代码，而且不报错。
+      // 同时它也没有 expectId，竞态防护只覆盖了资源轨道。
+      const codeUrl = base.code.manifestUrl;
+      check('代码轨道的 manifestUrl 带上 channel',
+        codeUrl.includes('channel='), codeUrl);
+      check('代码轨道的 manifestUrl 带上 expectId（竞态防护不能只覆盖资源轨道）',
+        codeUrl.includes('expectId='), codeUrl);
+      check('代码轨道与资源轨道用同一个清单身份（manifestId 本就覆盖代码文件）',
+        codeUrl.includes(`expectId=${base.manifestId}`),
+        `code 里 ${codeUrl.match(/expectId=(\w+)/)?.[1]} vs 顶层 ${base.manifestId}`);
+
+      const viaCodeUrl = await request(port, codeUrl);
+      check('照着 code.manifestUrl 请求能真的拿到代码清单',
+        viaCodeUrl.status === 200, `状态 ${viaCodeUrl.status}`);
+      if (viaCodeUrl.status === 200) {
+        const m = JSON.parse(viaCodeUrl.body.toString());
+        check('照 code.manifestUrl 拿到的确实是代码轨道而不是资源清单',
+          Array.isArray(m.files) && m.files.length > 0
+            && m.files.every((f) => f.path.startsWith('dll/')),
+          m.files.map((f) => f.path).join(', '));
+      }
+      const codeStalePin = await request(port,
+        `/api/manifest?platform=${codePlatform}&channel=default&track=code&expectId=deadbeefdeadbeef`);
+      check('代码轨道的 expectId 对不上时同样返回 409',
+        codeStalePin.status === 409, `状态 ${codeStalePin.status}`);
 
       // ---- 兼容性门禁 ----
       const tooOld = await cv('&current=1.5.0&codeCurrent=2.1.0&appVersion=1.0.0');
@@ -1659,23 +1779,9 @@ function testManualStructure() {
     cjk.length ? `残留 ${cjk.length} 处：${[...new Set(cjk)].slice(0, 10).join(' / ')}` : '');
 }
 
-/**
- * 退出前先把 stdout 真正写出去。
- *
- * Windows 上 stdout 指向管道或文件时写入是**异步**的，而 process.exit()
- * 不会等它排空 —— 结果是最后几行输出（往往正好是失败明细和汇总）
- * 凭空消失，只留下一个 exit code 1。这个坑在真实排查里非常费时间：
- * 你知道有断言失败了，却看不到是哪条。
- */
-function exitAfterFlush(code) {
-  const finish = () => process.exit(code);
-  if (process.stdout.writableLength === 0) {
-    setImmediate(finish);
-    return;
-  }
-  process.stdout.once('drain', finish);
-  setTimeout(finish, 1000); // 兜底，避免 stdout 永远不 drain
-}
+// 退出前先把 stdout 真正写出去 —— 实现见 scripts/lib/exit.js。
+// 原先这里有一份私有副本，其余脚本都没有，等于把失败明细放在赌运气上；
+// 现在统一走公共助手（清单 M-2）。
 
 // ============================================================ 主流程
 

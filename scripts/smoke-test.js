@@ -15,6 +15,7 @@
 //   npm run smoke
 
 const fs = require('fs');
+const { exitAfterFlush } = require('./lib/exit');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
@@ -85,7 +86,7 @@ function md5(buffer) {
 async function main() {
   if (!fs.existsSync(ASSETS_ROOT)) {
     console.error('找不到测试资产。请先执行：npm run sample\n');
-    process.exit(1);
+    exitAfterFlush(1);
   }
 
   // 备份配置，测试改坏了也能还原
@@ -577,7 +578,7 @@ async function main() {
   }
   console.log('='.repeat(56));
 
-  process.exit(failed ? 1 : 0);
+  exitAfterFlush(failed ? 1 : 0);
 }
 
 main().catch((err) => {
@@ -588,5 +589,5 @@ main().catch((err) => {
   } catch {
     /* 还原失败就算了，不要掩盖原始错误 */
   }
-  process.exit(1);
+  exitAfterFlush(1);
 });

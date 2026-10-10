@@ -99,6 +99,22 @@ class FaultInjector {
     this.hitCounts.delete(key);
   }
 
+  /**
+   * 清掉某个规则 id 的**全部**命中计数。
+   *
+   * 删规则时必须用这个，而不是 resetHitCount(id)：key 在 id 唯一时就是 id，
+   * 但重复 id 会带上 `#下标` 后缀，只删裸 id 会留下残渣。
+   * 残留的计数会让"删掉再重建同 id 的规则"继承旧配额 ——
+   * 表现为"配了故障却完全不触发"，而且没有任何报错（清单 H-2）。
+   */
+  resetHitCountsForId(id) {
+    const target = String(id);
+    const prefix = `${target}#`;
+    for (const key of [...this.hitCounts.keys()]) {
+      if (key === target || key.startsWith(prefix)) this.hitCounts.delete(key);
+    }
+  }
+
   /** 规则的运行时视图，供接口和界面显示。 */
   describeRules() {
     const faultEnabled = this.isEnabled();

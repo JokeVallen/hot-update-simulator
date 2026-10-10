@@ -13,6 +13,66 @@
 
 ## 未发布
 
+## 2.2.1 - 2026-10-10
+
+修的是应用侧实际用出来的问题（`模拟器待修清单.md`）。三条高危有一个共同点：
+**都是静默失效** —— 客户端只表现为"故障没触发"，人会先去怀疑客户端和网络。
+
+### 修复
+
+- **代码轨道的 `manifestUrl` 只带 `platform` 和 `track=code`**。2.0.0 起渠道决定
+  读哪个目录，于是客户端照这个 URL 取清单**永远拿到默认渠道的代码包** ——
+  beta 用户下到正式渠道的代码，且不报错。同时它没有 `expectId`，
+  竞态防护只覆盖了资源轨道。
+
+  现在与资源轨道一致，带上 `channel` 和 `expectId`。复用同一个 `manifestId`
+  是正确的：`manifestIdFor()` 本就同时覆盖资源文件、代码文件、代码元信息、
+  渠道与版本，不需要给代码轨道单独造一个身份。
+
+- **删掉规则再重建同 id 的规则时，命中计数不重置**。计数器按 `${id}#${index}`
+  存，而 DELETE 用裸 id 去清 —— 键永远对不上。残留的计数让新规则**一出生就
+  maxHits 用尽、静默不触发**。
+
+  改成 id 唯一时直接用 id 作键（重复 id 才退回带下标的形式）。这一并解决了
+  另一个同源问题：**删掉前面一条规则会让后面所有规则的下标前移、命中计数
+  全部归零**。规则匹配是"第一条合格的决定"，所以顺序变化很常见。
+
+- **`POST /api/control/fault/rules` 不拦重复 id**。同一个 id 能 POST 出两条规则，
+  而匹配语义是"第一条合格的决定"，于是后加的那条被前面的挡住、**静默失效**。
+  现在返回 **409** 并指明可以用 `PUT /api/control/fault/rules/{id}` 更新。
+
+- **手册「协议版本与能力协商」整节停在 1.1.0**：`protocolVersion` 写着 1（实际是 2），
+  `capabilities` 示例还留着协议 2 已删除的 `grayByDeviceId`、少了新增的
+  `channelContent` 与 `grayRules`。
+
+  根因是 `docs-check` 只查"名字有没有被提到"，**不校验值**。所以除了改值，
+  还给 `docs-check` 加了断言：手册里的 `protocolVersion` 必须等于
+  `PROTOCOL_VERSION`，`capabilities` 必须与代码数组完全一致（缺项和多出的都报）。
+
+- **8 个测试脚本直接调 `process.exit()`**，Windows 上 stdout 指向管道或文件时
+  写入是异步的，会让末尾输出（往往正是失败明细）凭空消失。
+  原先只有 `regression-test.js` 有一份私有实现，现已抽成 `scripts/lib/exit.js`，
+  `smoke-test` / `soak-test` / `docs-check` / `arch-report` / `version-check` /
+  `ui-check` / `bump-version` / `make-release` 全部接入。
+
+- `regression-test.js` 里最后一处 `fs.rmSync` 换成 `safe-rm`。
+  删的是 ASCII 路径、暂时没出问题，但别给人留下可以照抄的错误范例
+  （`fs.rmSync(递归)` 在 Windows + 非中文路径上会静默失败，纯中文路径上
+  甚至让 Node 硬崩）。
+
+### 行为变化
+
+- `POST /api/control/fault/rules` 用已存在的 id 时，从 **201 变成 409**。
+  正确用法（每次用新 id）不受影响；会撞 id 的调用方本来就是错的 ——
+  它此前拿到的是"一条永远不会生效的规则"。
+
+### 顺带说明
+
+`docs-check` 新加的那条断言，初版自己写错了：`missed` 是计数器不是数组，
+`missed.push()` 会抛 `TypeError`。结果是**值正确时静默通过、值错误时崩溃** ——
+恰恰在最该报错的时候不报错。用反向测试（故意改坏手册再跑）发现并修正，
+现在 5 种破坏方式都能干净地报错、且不改坏手册文件。
+
 ## 2.2.0 - 2026-10-06
 
 ### 新增
