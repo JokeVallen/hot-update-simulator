@@ -92,13 +92,19 @@ HOST=0.0.0.0 npm start        # 然后在别的设备打开 http://<本机IP>:55
 `backend/config.json`。打一个干净的包：
 
 ```bash
-npm run release               # → release/hot-update-simulator-1.0.0.tgz
+npm run release               # → release/hot-update-simulator-2.2.2.tgz
 ```
 
 包里只有 git 跟踪的源码 + 构建好的 `dist/`，**不含**任何开发数据，
 而且 `backend/config.json` 会被**重置成默认值**——否则开发时调出来的故障规则
 和模拟参数会跟着进到发行包里。工作区不干净时会拒绝打包（发行包必须对应到
 确切的提交），要强制加 `--force`。
+
+**内部工作文档不进包**（`ARCHITECTURE-ASSESSMENT.md`、`模拟器待修清单.md`）：
+它们是开发过程的记录，对拿到包的人没有意义，还可能让人误以为包里带着待办问题。
+判据是"使用者需不需要它来用这个工具"——所以 `README.md` 和 `CHANGELOG.md` 要留
+（后者是使用方判断"这次要不要升级"的依据），手册更要留（面板要渲染它）。
+清单在 `scripts/make-release.js` 的 `INTERNAL_DOCS`，写了个不存在的文件时会告警。
 
 ```bash
 mkdir D:\hus-runtime

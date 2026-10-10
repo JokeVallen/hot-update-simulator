@@ -39,6 +39,22 @@ const OUT_DIR = path.join(ROOT, 'release');
 const NAME = `${PKG.name}-${PKG.version}`;
 const STAGE = path.join(OUT_DIR, NAME);
 
+/**
+ * 不进发行包的文件：**内部工作文档**。
+ *
+ * 判据是"使用者需不需要它来用这个工具"，而不是"它是不是文档"：
+ *   * README.md   —— 要，它是给人看的第一份说明
+ *   * CHANGELOG.md—— 要，使用方靠它判断这次要不要升级、升了会怎样
+ *   * 下面这些    —— 不要，它们是开发过程的记录（代码审计结论、待修清单），
+ *                    对拿到包的人没有意义，还可能让人误以为包里带着待办问题
+ *
+ * 按**仓库相对路径**精确匹配，避免误伤同名的必要文件。
+ */
+const INTERNAL_DOCS = [
+  'ARCHITECTURE-ASSESSMENT.md',
+  '模拟器待修清单.md',
+];
+
 function git(...args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
 }
@@ -127,8 +143,24 @@ function main() {
   fs.mkdirSync(STAGE, { recursive: true });
 
   const tracked = gitListFiles();
-  for (const rel of tracked) copyFile(rel);
-  console.log(`  源码     ${tracked.length} 个跟踪文件`);
+  const excluded = [];
+  const shipped = tracked.filter((rel) => {
+    if (!INTERNAL_DOCS.includes(rel)) return true;
+    excluded.push(rel);
+    return false;
+  });
+  for (const rel of shipped) copyFile(rel);
+  console.log(`  源码     ${shipped.length} 个跟踪文件`);
+  if (excluded.length) {
+    console.log(`  排除     ${excluded.length} 个内部工作文档（使用者用不到，不该出现在发行包里）`);
+    for (const rel of excluded) console.log(`             - ${rel}`);
+  }
+  // 排除清单里写了个已经不存在的文件时提醒一声，免得它悄悄失效
+  const stale = INTERNAL_DOCS.filter((n) => !excluded.includes(n));
+  if (stale.length) {
+    console.log(`  ⚠️  排除清单里有 ${stale.length} 项没匹配到任何跟踪文件（文件改名或删除了？）：`);
+    for (const n of stale) console.log(`             - ${n}`);
+  }
 
   copyDir(dist, path.join(STAGE, 'dist'));
   console.log('  前端     dist/（开箱即可 npm start，不用再构建）');
@@ -153,6 +185,7 @@ function main() {
     '',
     '这是一个「使用版」包，和开发目录无关：',
     '  * 不含 node_modules / storage / 开发时的配置',
+    '  * 不含内部工作文档（代码审计结论、待修清单等）',
     '  * backend/config.json 是干净的默认值',
     '  * dist/ 已构建好，不需要再跑前端构建',
     '',
