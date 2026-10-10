@@ -40,20 +40,27 @@ const NAME = `${PKG.name}-${PKG.version}`;
 const STAGE = path.join(OUT_DIR, NAME);
 
 /**
- * 不进发行包的文件：**内部工作文档**。
+ * 根目录下**允许**进发行包的文档。
  *
- * 判据是"使用者需不需要它来用这个工具"，而不是"它是不是文档"：
- *   * README.md   —— 要，它是给人看的第一份说明
- *   * CHANGELOG.md—— 要，使用方靠它判断这次要不要升级、升了会怎样
- *   * 下面这些    —— 不要，它们是开发过程的记录（代码审计结论、待修清单），
- *                    对拿到包的人没有意义，还可能让人误以为包里带着待办问题
+ * 其余根目录 `.md` 一律不进包（**默认拒绝**）。
+ * 为什么用白名单而不是黑名单：黑名单要求每新增一个内部文档都记得来加一条，
+ * 漏一次就把开发过程的记录发给了使用方 —— 实际就漏过一次
+ * （`模拟器评估报告.md` 没进黑名单，跟着 2.6.0 的包出去了）。
+ * 白名单反过来：忘了加反而更安全。
  *
- * 按**仓库相对路径**精确匹配，避免误伤同名的必要文件。
+ * 判据仍然是"使用者需不需要它来用这个工具"：
+ *   README.md    要，第一份说明
+ *   CHANGELOG.md 要，使用方靠它判断这次要不要升级
+ * 子目录里的文档不受影响（`backend/public/manual.*.md` 是面板要渲染的手册）。
  */
-const INTERNAL_DOCS = [
-  'ARCHITECTURE-ASSESSMENT.md',
-  '模拟器待修清单.md',
-];
+const SHIPPED_ROOT_DOCS = ['README.md', 'CHANGELOG.md'];
+
+/** 这个仓库相对路径要不要排除在发行包之外。 */
+function isInternalDoc(rel) {
+  if (rel.includes('/')) return false;          // 只管根目录
+  if (!rel.endsWith('.md')) return false;       // 只管 markdown
+  return !SHIPPED_ROOT_DOCS.includes(rel);
+}
 
 function git(...args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
@@ -145,7 +152,7 @@ function main() {
   const tracked = gitListFiles();
   const excluded = [];
   const shipped = tracked.filter((rel) => {
-    if (!INTERNAL_DOCS.includes(rel)) return true;
+    if (!isInternalDoc(rel)) return true;
     excluded.push(rel);
     return false;
   });
@@ -155,12 +162,7 @@ function main() {
     console.log(`  排除     ${excluded.length} 个内部工作文档（使用者用不到，不该出现在发行包里）`);
     for (const rel of excluded) console.log(`             - ${rel}`);
   }
-  // 排除清单里写了个已经不存在的文件时提醒一声，免得它悄悄失效
-  const stale = INTERNAL_DOCS.filter((n) => !excluded.includes(n));
-  if (stale.length) {
-    console.log(`  ⚠️  排除清单里有 ${stale.length} 项没匹配到任何跟踪文件（文件改名或删除了？）：`);
-    for (const n of stale) console.log(`             - ${n}`);
-  }
+  console.log(`  文档     根目录只放行 ${SHIPPED_ROOT_DOCS.join(' / ')}，其余 .md 默认不进包`);
 
   copyDir(dist, path.join(STAGE, 'dist'));
   console.log('  前端     dist/（开箱即可 npm start，不用再构建）');
