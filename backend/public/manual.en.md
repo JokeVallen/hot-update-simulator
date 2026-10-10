@@ -417,6 +417,26 @@ An unknown channel returns **404** listing the available channels, and **never f
 default silently** — "beta users received production content" is impossible to diagnose when
 nothing reports an error.
 
+**The same holds under the flat layout**: the only channel that platform has is the default one, so
+`?channel=something-else` is a 404 too (not "there is only one channel anyway, here you go").
+
+If your client hardcodes a channel name while the server uses the flat layout (say the client sends
+`channel=production`), two options:
+
+- change the client to send `default` (or nothing at all)
+- **or** rename it on the server — no directory needed:
+
+  ```jsonc
+  { "hotUpdate": { "channels": ["production"], "defaultChannel": "production" } }
+  ```
+
+  (`defaultChannel` must appear in `channels`, otherwise it is normalised to `channels[0]`.)
+
+The 404 body states which layout you are on and both of those options, so you can act on it
+directly. Also, the `channel` field in responses **always reports the channel actually in effect**
+rather than echoing what you sent — otherwise a client keying its cache by that field would file
+content under the wrong name.
+
 `GET /api/platforms` lists the channels each platform actually has content for, plus the names
 declared in the config.
 
@@ -514,6 +534,40 @@ With `ratio: 0.5`:
 Fields that do not apply to the current `type` are **ignored**: the backend only reads
 the relevant ones, and the panel's rule editor hides and disables the rest so you cannot
 silently submit a value you cannot see.
+
+#### `truncate` fails by *waiting for a timeout*
+
+Measured on the same 4096-byte file on the same machine:
+
+| Rule | Time | Received | How it ended |
+|---|---|---|---|
+| `abort` ratio 0.5 | **3 ms** | 2048 B | connection reset |
+| `truncate` ratio 0.4 | **6010 ms** | 1638 B | connection closed |
+| no fault | 2 ms | 4096 B | clean end |
+
+**A factor of 2000**, and the reason is worth a client developer's attention:
+
+- `abort` destroys the socket outright — the connection is gone, so the client knows
+  **immediately**
+- `truncate` only ends the body early and **leaves the connection open** (HTTP keep-alive,
+  server sends `Keep-Alive: timeout=5`). The client sees `Content-Length: 4096` but has only
+  1638 bytes, so it keeps waiting for the rest until the server's keep-alive timeout closes
+  the connection (5 s) and it can finally call it "transfer interrupted"
+
+Two consequences:
+
+1. **Batch timings**: every truncated attempt in a `truncate` scenario burns about 6 seconds
+2. **Client timeout policy has to account for it**: `truncate` and `abort` look identical in
+   *symptom* (both are "transfer interrupted") but differ by three orders of magnitude in
+   *cost*. Five retries is 30 seconds
+
+**This is not specific to the simulator**: plenty of real gateways and CDNs truncate a response
+without closing the connection either, and the client just appears to hang. So rather than a quirk
+of this tool, it faithfully reproduces a failure mode that is common in the wild — **do not assume
+a truncated transfer means the connection drops immediately**.
+
+> If you want the "connection cut" symptom, use `abort`; if you want to cover *both* client paths
+> (hanging vs. failing fast) in one scenario, add both rules.
 
 ### Which Rule Wins When Several Match
 

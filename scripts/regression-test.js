@@ -927,6 +927,92 @@ async function testAssetEdgeCases() {
       countBefore > 0 && countAfter === countBefore,
       `删除前 ${countBefore} → 删除后 ${countAfter}`);
 
+    // ---------------- effective=false 必须说明原因（清单 N-1） ----------------
+    //
+    // 原来 GET 只返回 { rules }，而 effective=false 至少对应四种原因：
+    // 总闸关闭、规则自身停用、配额用尽、被前面的规则遮挡。
+    // 写验证脚本时就踩过：读到 effective=false 以为是"规则不生效"，
+    // 实际是总闸没开。
+    section('失效原因的可解释性');
+
+    await clearFaults(port);
+    const readRules = async () => JSON.parse(
+      (await request(port, '/api/control/fault/rules')).body.toString(),
+    );
+
+    await postJson(port, '/api/control/fault/rules', mkRule('reason-probe'));
+
+    let listing = await readRules();
+    check('GET /fault/rules 顶层给出总闸状态（和 POST 对齐）',
+      listing.faultEnabled === false, `faultEnabled=${listing.faultEnabled}`);
+    check('总闸关闭时顶层给出 warning，不用去猜',
+      typeof listing.warning === 'string' && /总闸/.test(listing.warning),
+      String(listing.warning).slice(0, 50));
+    check('顶层给出规则总数与生效数摘要',
+      listing.totalRules === 1 && listing.effectiveRules === 0,
+      `total=${listing.totalRules} effective=${listing.effectiveRules}`);
+    check('总闸关闭时规则的 effectiveReason 是 master-off',
+      listing.rules[0].effectiveReason === 'master-off', listing.rules[0].effectiveReason);
+
+    // 打开总闸 → ok
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    listing = await readRules();
+    check('总闸打开后 effectiveReason 变成 ok',
+      listing.rules[0].effective === true && listing.rules[0].effectiveReason === 'ok',
+      `${listing.rules[0].effectiveReason}`);
+
+    // 规则自身停用 → rule-disabled
+    await request(port, '/api/control/fault/rules/reason-probe', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    listing = await readRules();
+    check('规则自身停用时 effectiveReason 是 rule-disabled',
+      listing.rules[0].effectiveReason === 'rule-disabled', listing.rules[0].effectiveReason);
+
+    // 配额用尽 → max-hits-reached
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', mkRule('quota-probe', { maxHits: 1 }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    await request(port, '/api/version?platform=Android&current=1.0.0');
+    listing = await readRules();
+    check('配额用尽时 effectiveReason 是 max-hits-reached',
+      listing.rules[0].effectiveReason === 'max-hits-reached',
+      `${listing.rules[0].effectiveReason} hits=${listing.rules[0].hits}/${listing.rules[0].maxHits}`);
+
+    // 被无条件规则遮挡 → shadowed，并指出被谁挡
+    //
+    // 匹配语义是"第一条合格的决定"，所以前面只要有一条**无条件匹配**的规则，
+    // 后面所有规则永远不会被看到。这是"配了却不生效"最难查的成因之一。
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', {
+      id: 'shadow-catch-all', enabled: true, probability: 1,
+      match: {}, action: { type: 'status', status: 503 },
+    });
+    await postJson(port, '/api/control/fault/rules', mkRule('shadow-victim'));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    listing = await readRules();
+    const victim = listing.rules.find((r) => r.id === 'shadow-victim');
+    check('被无条件规则遮挡时 effectiveReason 是 shadowed，并指出被谁挡',
+      victim.effectiveReason === 'shadowed' && victim.shadowedBy === 'shadow-catch-all',
+      `${victim.effectiveReason} shadowedBy=${victim.shadowedBy}`);
+    const shadowHit = await request(port, '/api/version?platform=Android&current=1.0.0');
+    check('实测被遮挡的规则确实不触发（拿到的是挡它的那条的 503）',
+      shadowHit.status === 503, `状态 ${shadowHit.status}`);
+
     await clearFaults(port);
 
     // ---------------- 模拟范围：不能把控制面板自己搞坏 ----------------
@@ -1533,6 +1619,37 @@ async function testAssetEdgeCases() {
         flatDl.status === 200 && flatDl.body.length === 64,
         `状态 ${flatDl.status}, ${flatDl.body.length} 字节`);
 
+      // ---- 平铺布局下拼错渠道也必须 404（清单 N-2）----
+      //
+      // 原来平铺布局会**忽略**请求里的渠道名，直接给默认渠道的内容，还把那个
+      // 拼错的名字回显进 `channel`。后果：客户端照着 `channel` 给缓存分目录，
+      // 会把默认渠道的内容记在 nosuchchannel/ 名下；而"渠道写错却静默拿默认内容"
+      // 正是 2.0.0 声称已经消除的失败模式。
+      const flatWrongV = await request(port, `/api/version?platform=${flatPlatform}&channel=nosuch&current=0.0.1`);
+      check('平铺布局 + 未知渠道 → /api/version 返回 404（不静默退回默认）',
+        flatWrongV.status === 404, `状态 ${flatWrongV.status}`);
+      if (flatWrongV.status === 404) {
+        const wb = JSON.parse(flatWrongV.body.toString());
+        check('该 404 说明这是平铺布局，并给出让客户端渠道名生效的办法',
+          wb.layout === 'flat' && /defaultChannel/.test(wb.hint || ''),
+          (wb.hint || '').slice(0, 80));
+      }
+      const flatWrongM = await request(port, `/api/manifest?platform=${flatPlatform}&channel=nosuch`);
+      check('平铺布局 + 未知渠道 → /api/manifest 同样 404',
+        flatWrongM.status === 404, `状态 ${flatWrongM.status}`);
+      const flatWrongAsset = await request(port, `/assets/${flatPlatform}/nosuch/bundles/a.ab`);
+      check('平铺布局下资产路径带未知渠道段也 404（不能从这条路绕过）',
+        flatWrongAsset.status === 404, `状态 ${flatWrongAsset.status}`);
+
+      // 默认渠道（或不传）必须照常
+      const flatOkDefault = await request(port, `/api/manifest?platform=${flatPlatform}&channel=${flatManifest.channel}`);
+      check('平铺布局 + 报出过的默认渠道名仍然 200',
+        flatOkDefault.status === 200, `状态 ${flatOkDefault.status}`);
+
+      // `channel` 必须是实际生效的那个，不是回显
+      check('平铺布局下 channel 报的是实际生效的默认渠道（不是回显请求参数）',
+        flatManifest.channel === 'default', `channel=${flatManifest.channel}`);
+
       const platformList = JSON.parse((await request(port, '/api/platforms')).body.toString());
       const chanEntry = platformList.platforms.find((p) => p.name === chanPlatform);
       const flatEntry = platformList.platforms.find((p) => p.name === flatPlatform);
@@ -1568,8 +1685,8 @@ async function testAssetEdgeCases() {
         },
       });
 
-      const grayOf = async (qs) => {
-        const r = await request(port, `/api/version?platform=Android&current=0.0.1${qs}`);
+      const grayOf = async (qs, platform = 'Android') => {
+        const r = await request(port, `/api/version?platform=${platform}&current=0.0.1${qs}`);
         return JSON.parse(r.body.toString()).gray || {};
       };
 
@@ -1578,10 +1695,18 @@ async function testAssetEdgeCases() {
         wl.selected === true && wl.matchedRule === 'whitelist',
         `selected=${wl.selected}, rule=${wl.matchedRule}`);
 
-      const betaOnly = await grayOf('&deviceId=other&channel=beta');
+      // 渠道条件必须用**真的有这个渠道**的平台来测。
+      // Android 是平铺布局，`channel=beta` 现在会 404（清单 N-2：拼错渠道不再
+      // 静默退回默认），拿它测等于什么都没测到。
+      const betaOnly = await grayOf('&deviceId=other&channel=beta', chanPlatform);
       check('按渠道灰度：命中 beta 渠道的规则',
         betaOnly.selected === true && betaOnly.matchedRule === 'beta-only',
         `selected=${betaOnly.selected}, rule=${betaOnly.matchedRule}`);
+
+      // 同一个平台、换个渠道就不该命中 —— 这才说明渠道条件真的参与了判断
+      const notBeta = await grayOf('&deviceId=other&channel=default', chanPlatform);
+      check('同一平台的另一个渠道不命中该规则（渠道条件真的在起作用）',
+        notBeta.selected === false, `selected=${notBeta.selected}`);
 
       const oldApp = await grayOf('&deviceId=other&appVersion=1.0.0');
       check('主包版本低于门槛时不入组',

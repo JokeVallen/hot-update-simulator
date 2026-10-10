@@ -241,7 +241,10 @@ function buildCodeDecision({ code, query, appVersion, channel, manifestId }) {
 
 function buildVersionDecision({ manifest, query, hotUpdate }) {
   const currentVersion = query.current ? String(query.current) : null;
-  const channel = String(query.channel || manifest.channel || hotUpdate.defaultChannel || 'default');
+  // 渠道取**清单里实际生效的那个**，不再回显请求参数。
+  // 回显会造成自相矛盾：平铺布局下 ?channel=nosuch 会被回显成 "nosuch"，
+  // 而返回的内容其实是默认渠道的 —— 客户端按这个字段分缓存目录就会串。
+  const channel = String(manifest.channel || hotUpdate.defaultChannel || 'default');
   const appVersion = query.appVersion ? String(query.appVersion) : null;
 
   // 语义比较，不是字符串严格相等：客户端报 "1.0" 而清单是 "1.0.0"
@@ -385,15 +388,29 @@ module.exports = function createApiRouter({ configManager, assetServer }) {
   function notFoundBody(platform, req) {
     const wanted = req.query.channel ? String(req.query.channel) : null;
     const channels = assetServer.listChannels(platform);
+    const def = assetServer.defaultChannel();
+
     if (channels.length) {
+      // 平铺布局（只有一个渠道）时的提示要更具体：使用者多半是"客户端写死了一个
+      // 渠道名，但服务端没按渠道分层"，光说"没有这个渠道"帮不上忙。
+      const flat = channels.length === 1 && !assetServer.hasChannelLayout(
+        assetServer.safeResolve(assetServer.root(), platform) || '',
+      );
       return {
         error: wanted
           ? `平台 ${platform} 下没有渠道 "${wanted}"`
           : `平台 ${platform} 不存在或没有资源目录`,
         availableChannels: channels,
-        hint: wanted
-          ? `把 ?channel= 改成 ${channels.join(' / ')} 之一，或建一个名为 "${wanted}" 的目录`
-          : '检查资产目录，或在配置里改 server.assetDir',
+        defaultChannel: def,
+        layout: flat ? 'flat' : 'per-channel',
+        hint: !wanted
+          ? '检查资产目录，或在配置里改 server.assetDir'
+          : flat
+            ? `这个平台是平铺布局：整个平台目录就是渠道 "${def}" 的内容，没有别的渠道。`
+              + `把 ?channel= 改成 ${def}、或干脆不传；`
+              + `如果你就是想用 "${wanted}" 这个名字，把 hotUpdate.defaultChannel 和 `
+              + `hotUpdate.channels 都改成它（不需要建目录）。`
+            : `把 ?channel= 改成 ${channels.join(' / ')} 之一，或建一个名为 "${wanted}" 的目录`,
       };
     }
     return {

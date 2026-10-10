@@ -237,12 +237,24 @@ class AssetServer {
     if (!platformDir || !fs.existsSync(platformDir)) return null;
 
     if (!this.hasChannelLayout(platformDir)) {
-      // 平铺布局：忽略请求的渠道，整个平台目录就是默认渠道的内容。
-      // 不做"渠道不存在"的报错，因为这是旧布局，本来就没有渠道概念。
+      // 平铺布局：整个平台目录就是默认渠道的内容。
+      //
+      // 但**不能**因此忽略请求里的渠道名 —— 那样拼错渠道会静默拿到默认内容，
+      // 正是 2.0.0 声称消除掉的失败模式。而且 /api/version 还会把这个拼错的
+      // 名字回显进 `channel`，客户端照它给缓存分目录就会把默认渠道的内容
+      // 记在 nosuchchannel/ 名下。
+      //
+      // 平铺布局下唯一存在的渠道就是默认渠道，所以只接受它（或没传）。
+      // 想让客户端用的名字生效，把 hotUpdate.defaultChannel 设成那个名字即可
+      // （注意它必须在 hotUpdate.channels 里）。
+      const def = this.defaultChannel();
+      const wanted = channel ? String(channel) : '';
+      if (wanted && wanted !== def) return null;
+
       return {
         dir: platformDir,
         platformDir,
-        channel: this.defaultChannel(),
+        channel: def,
         channelInUrl: false,
       };
     }

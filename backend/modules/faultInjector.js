@@ -115,17 +115,62 @@ class FaultInjector {
     }
   }
 
-  /** 规则的运行时视图，供接口和界面显示。 */
+  /**
+   * 规则的运行时视图，供接口和界面显示。
+   *
+   * `effective` 是 false 时，**光看这个布尔量没法知道原因** —— 它至少对应四种
+   * 情况，而且每一种的处置方式都不同：总闸没开、规则自己停了、配额用尽、
+   * 被前面的规则挡住。所以额外给出 `effectiveReason`。
+   *
+   * 第 4 种（被挡住）值得单独说：匹配语义是"第一条合格的决定"，所以只要前面
+   * 有一条**无条件匹配**的规则，后面所有规则永远不会被看到。这是"配了却不生效"
+   * 最常见也最难查的成因之一（典型场景：列表第一条是个 catch-all）。
+   * 这里能静态判定，因为无条件规则对任何请求都合格。
+   */
   describeRules() {
     const faultEnabled = this.isEnabled();
-    return this.compiled().map((entry) => ({
-      ...entry.rule,
-      hits: this.getHitCount(entry.key),
-      // 直接告诉界面“这条规则现在到底会不会生效”，省得使用者去猜
-      // “为什么我建了规则却什么都没发生”（总闸没开是最常见的原因）。
-      effective: faultEnabled && entry.rule.enabled !== false
-        && (Number(entry.rule.maxHits) === 0 || this.getHitCount(entry.key) < Number(entry.rule.maxHits)),
-    }));
+    const compiled = this.compiled();
+
+    const maxHitsOf = (rule) => Number(rule.maxHits) || 0;
+    const exhausted = (entry) => maxHitsOf(entry.rule) > 0
+      && this.getHitCount(entry.key) >= maxHitsOf(entry.rule);
+
+    // 找第一条「无条件匹配」且当前会生效的规则的下标 —— 它会挡住后面所有规则
+    let shadowFrom = -1;
+    for (const entry of compiled) {
+      if (entry.rule.enabled === false) continue;
+      if (exhausted(entry)) continue;
+      const unconditional = (!entry.methods || entry.methods.length === 0)
+        && (!entry.prefixes || entry.prefixes.length === 0)
+        && (!entry.globs || entry.globs.length === 0)
+        && (!entry.platforms || entry.platforms.length === 0);
+      if (unconditional) {
+        shadowFrom = entry.index;
+        break;
+      }
+    }
+
+    return compiled.map((entry) => {
+      const hits = this.getHitCount(entry.key);
+
+      let reason = 'ok';
+      if (!faultEnabled) reason = 'master-off';
+      else if (entry.rule.enabled === false) reason = 'rule-disabled';
+      else if (exhausted(entry)) reason = 'max-hits-reached';
+      else if (shadowFrom >= 0 && entry.index > shadowFrom) reason = 'shadowed';
+
+      return {
+        ...entry.rule,
+        hits,
+        maxHits: maxHitsOf(entry.rule),
+        // 直接告诉界面“这条规则现在到底会不会生效”，省得使用者去猜
+        // “为什么我建了规则却什么都没发生”（总闸没开是最常见的原因）。
+        effective: reason === 'ok',
+        effectiveReason: reason,
+        // 被挡住的规则按定义永远不会触发。挡它的那条一并给出，界面可以直接指过去。
+        ...(reason === 'shadowed' ? { shadowedBy: compiled[shadowFrom].rule.id } : {}),
+      };
+    });
   }
 
   /**

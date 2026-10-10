@@ -146,7 +146,20 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
    *       400: { description: 参数非法 }
    */
   router.get('/fault/rules', (req, res) => {
-    res.json({ rules: faultInjector.describeRules() });
+    const rules = faultInjector.describeRules();
+    const faultEnabled = faultInjector.isEnabled();
+    res.json({
+      rules,
+      // 总闸状态必须给出来。每条的 effective 都带原因（effectiveReason），
+      // 但"总闸没开"是最常见的那一种，放在顶层最省事 —— 也是和 POST 对齐。
+      faultEnabled,
+      // 顺带把计数摘要给出来，界面/脚本不用自己数
+      totalRules: rules.length,
+      effectiveRules: rules.filter((r) => r.effective).length,
+      ...(faultEnabled ? {} : {
+        warning: '故障注入总闸当前是关闭的，所有规则都不会生效。请打开「启用故障注入」。',
+      }),
+    });
   });
 
   router.post('/fault/rules', (req, res) => {
