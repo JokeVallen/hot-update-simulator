@@ -258,6 +258,11 @@ function normalizeRule(input, index = 0) {
     enabled: input.enabled === undefined ? true : Boolean(input.enabled),
     probability: clampNumber(input.probability, 0, 1, 1),
     maxHits: Math.max(0, Math.round(clampNumber(input.maxHits, 0, 1000000, 0))),
+    // maxHits 的作用域：
+    //   global（默认）—— 配额全局共用，先到先得
+    //   device       —— 每台设备各自一份配额（deviceId 取自请求的 ?deviceId=）
+    // 多设备联调时才需要 device：否则一台设备把前 N 次用光，别的设备就测不到了。
+    maxHitsScope: input.maxHitsScope === 'device' ? 'device' : 'global',
     // 时间维度：相对「场景时钟」的两个偏移量（毫秒）。
     //   afterMs —— 配好之后多久才开始生效（0 = 立刻）
     //   forMs   —— 生效多久之后自动失效（0 = 一直有效）

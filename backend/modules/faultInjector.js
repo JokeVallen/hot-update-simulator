@@ -168,6 +168,32 @@ class FaultInjector {
     return this.hitCounts.get(key) || 0;
   }
 
+  /**
+   * 一次命中的计数键。
+   *
+   * 默认用规则自己的键（全局配额）。`maxHitsScope: 'device'` 时再拼上 deviceId，
+   * 于是每台设备各有一份配额 —— 多设备联调时，一台设备不会把"前 N 次失败"
+   * 的配额用光，导致别的设备根本测不到。
+   *
+   * deviceId 取自请求的 `?deviceId=`。热更请求本来就带这个参数（灰度分组在用），
+   * 所以不额外要求客户端做什么。没传的设备共用一个桶，行为仍然是确定的。
+   */
+  hitKey(entry, req) {
+    if (entry.rule.maxHitsScope !== 'device') return entry.key;
+    const device = req && req.query && req.query.deviceId ? String(req.query.deviceId) : '';
+    return `${entry.key}@${device || '(no-device)'}`;
+  }
+
+  /** 某条规则在设备维度下的各设备计数（只有 device 作用域才有意义）。 */
+  hitsByDevice(entry) {
+    const prefix = `${entry.key}@`;
+    const out = {};
+    for (const [key, count] of this.hitCounts) {
+      if (key.startsWith(prefix)) out[key.slice(prefix.length)] = count;
+    }
+    return out;
+  }
+
   resetHitCounts() {
     this.hitCounts.clear();
   }
@@ -186,9 +212,12 @@ class FaultInjector {
    */
   resetHitCountsForId(id) {
     const target = String(id);
-    const prefix = `${target}#`;
+    const hashPrefix = `${target}#`;
+    const devicePrefix = `${target}@`;
     for (const key of [...this.hitCounts.keys()]) {
-      if (key === target || key.startsWith(prefix)) this.hitCounts.delete(key);
+      if (key === target || key.startsWith(hashPrefix) || key.startsWith(devicePrefix)) {
+        this.hitCounts.delete(key);
+      }
     }
   }
 
@@ -210,8 +239,17 @@ class FaultInjector {
     const elapsed = Date.now() - this.clockStartedAt;
 
     const maxHitsOf = (rule) => Number(rule.maxHits) || 0;
-    const exhausted = (entry) => maxHitsOf(entry.rule) > 0
-      && this.getHitCount(entry.key) >= maxHitsOf(entry.rule);
+
+    /**
+     * 这条规则当前还算不算「配额没用完」。
+     *
+     * 设备作用域下**永远算没用完**：配额是按设备分的，已经出现过的设备用光了，
+     * 换一台新设备照样能触发。把它标成"配额用尽"会误导 —— 那不是一个全局事实。
+     */
+    const exhausted = (entry) => {
+      if (entry.rule.maxHitsScope === 'device') return false;
+      return maxHitsOf(entry.rule) > 0 && this.getHitCount(entry.key) >= maxHitsOf(entry.rule);
+    };
 
     // 找第一条「无条件匹配」且当前会生效的规则的下标 —— 它会挡住后面所有规则。
     // 时间维度也要算进来：还没开始生效的 catch-all 挡不住任何人。
@@ -232,8 +270,14 @@ class FaultInjector {
     }
 
     return compiled.map((entry) => {
-      const hits = this.getHitCount(entry.key);
       const timing = timeStateOf(entry.rule, elapsed);
+      const deviceScope = entry.rule.maxHitsScope === 'device';
+      const byDevice = deviceScope ? this.hitsByDevice(entry) : null;
+      // 设备作用域下 hits 报"最靠前的那台设备用了多少" —— 比求和有意义：
+      // 界面关心的是"有没有哪台设备已经把配额用光了"。
+      const hits = deviceScope
+        ? Object.values(byDevice).reduce((m, n) => Math.max(m, n), 0)
+        : this.getHitCount(entry.key);
 
       let reason = 'ok';
       if (!faultEnabled) reason = 'master-off';
@@ -247,6 +291,13 @@ class FaultInjector {
         ...entry.rule,
         hits,
         maxHits: maxHitsOf(entry.rule),
+        // 设备维度：把每台设备的用量摊开，界面才能说明"谁用完了"
+        ...(deviceScope ? {
+          hitsByDevice: byDevice,
+          exhaustedDevices: Object.entries(byDevice)
+            .filter(([, n]) => maxHitsOf(entry.rule) > 0 && n >= maxHitsOf(entry.rule))
+            .map(([d]) => d),
+        } : {}),
         // 直接告诉界面“这条规则现在到底会不会生效”，省得使用者去猜
         // “为什么我建了规则却什么都没发生”（总闸没开是最常见的原因）。
         effective: reason === 'ok',
@@ -301,7 +352,8 @@ class FaultInjector {
       }
 
       const maxHits = Number(rule.maxHits) || 0;
-      if (maxHits > 0 && this.getHitCount(entry.key) >= maxHits) continue;
+      const key = this.hitKey(entry, req);
+      if (maxHits > 0 && this.getHitCount(key) >= maxHits) continue;
 
       // 第一条合格规则说了算
       const probability = rule.probability === undefined ? 1 : Number(rule.probability);
@@ -309,7 +361,7 @@ class FaultInjector {
         return { ...empty, rule: null };
       }
 
-      this.hitCounts.set(entry.key, this.getHitCount(entry.key) + 1);
+      this.hitCounts.set(key, this.getHitCount(key) + 1);
       return this.buildPlan(rule, req);
     }
 

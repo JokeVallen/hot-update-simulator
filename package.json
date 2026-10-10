@@ -1,6 +1,6 @@
 {
   "name": "hot-update-simulator",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "游戏热更新服务端模拟器：可视化、可配置、带 API，用于复现弱网、断流、损坏等真实故障",
   "main": "backend/server.js",
   "scripts": {

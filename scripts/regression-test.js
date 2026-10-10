@@ -1138,6 +1138,93 @@ async function testAssetEdgeCases() {
         && JSON.parse(clamped.body.toString()).rule.forMs === 86400000,
       JSON.stringify(JSON.parse(clamped.body.toString()).rule));
 
+    // ---------------- maxHits 的设备维度（2.6.0） ----------------
+    //
+    // 全局配额在多设备联调时不够用：一台设备把"前 N 次失败"用光，
+    // 别的设备就根本测不到这个场景。
+    section('maxHits 的配额作用域');
+
+    const hitAs = (device) => request(port,
+      `/api/version?platform=Android&current=1.0.0&deviceId=${encodeURIComponent(device)}`);
+
+    // ---- global（默认）：共用 ----
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', mkRule('scope-global', { maxHits: 2 }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const gA = await hitAs('dev-A');
+    const gB = await hitAs('dev-B');
+    const gC = await hitAs('dev-C');
+    check('默认 global：配额共用，A 用掉两次后 B、C 都没有了',
+      gA.status === 500 && gB.status === 500 && gC.status === 200,
+      `${gA.status} → ${gB.status} → ${gC.status}`);
+
+    // ---- device：各自一份 ----
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules',
+      mkRule('scope-device', { maxHits: 2, maxHitsScope: 'device' }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const seq = [];
+    for (const d of ['dev-A', 'dev-A', 'dev-A', 'dev-B', 'dev-B', 'dev-C']) {
+      seq.push((await hitAs(d)).status);
+    }
+    check('device：每台设备各有 maxHits 次配额',
+      seq.join(',') === '500,500,200,500,500,500', seq.join(','));
+
+    listing2 = await clockOf();
+    const dr = listing2.rules[0];
+    check('device 作用域报出每台设备的用量',
+      dr.hitsByDevice && dr.hitsByDevice['dev-A'] === 2 && dr.hitsByDevice['dev-C'] === 1,
+      JSON.stringify(dr.hitsByDevice));
+    check('hits 报的是"最靠前那台设备"的用量，而不是求和',
+      dr.hits === 2, `hits=${dr.hits}`);
+    check('报出哪几台设备已把配额用光',
+      Array.isArray(dr.exhaustedDevices) && dr.exhaustedDevices.includes('dev-A')
+        && !dr.exhaustedDevices.includes('dev-C'),
+      JSON.stringify(dr.exhaustedDevices));
+    check('device 作用域不会被标成"配额用尽"（换台新设备照样能触发）',
+      dr.effectiveReason === 'ok' && dr.effective === true,
+      `${dr.effectiveReason} effective=${dr.effective}`);
+
+    // 不传 deviceId 共用一个桶
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules',
+      mkRule('scope-nodevice', { maxHits: 1, maxHitsScope: 'device' }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const nd1 = await request(port, '/api/version?platform=Android&current=1.0.0');
+    const nd2 = await request(port, '/api/version?platform=Android&current=1.0.0');
+    check('不传 deviceId 的请求共用一个桶（行为仍然确定）',
+      nd1.status === 500 && nd2.status === 200, `${nd1.status} → ${nd2.status}`);
+
+    // 删规则要清掉设备桶 —— H-2 的设备版本
+    await request(port, '/api/control/fault/rules/scope-nodevice', { method: 'DELETE' });
+    await postJson(port, '/api/control/fault/rules',
+      mkRule('scope-nodevice', { maxHits: 1, maxHitsScope: 'device' }));
+    listing2 = await clockOf();
+    check('删掉再重建时设备桶也清空了（H-2 的设备版本）',
+      Object.keys(listing2.rules[0].hitsByDevice || {}).length === 0,
+      JSON.stringify(listing2.rules[0].hitsByDevice));
+
+    // 非法作用域被归一
+    const badScope = await postJson(port, '/api/control/fault/rules', {
+      id: 'scope-bad', enabled: true, probability: 1, maxHitsScope: 'nonsense',
+      match: { pathPrefix: '/x' }, action: { type: 'status', status: 500 },
+    });
+    check('非法的 maxHitsScope 归一成 global（不留半个能用的状态）',
+      JSON.parse(badScope.body.toString()).rule.maxHitsScope === 'global',
+      JSON.parse(badScope.body.toString()).rule.maxHitsScope);
+
     await clearFaults(port);
 
     // ---------------- 模拟范围：不能把控制面板自己搞坏 ----------------

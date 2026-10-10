@@ -609,6 +609,39 @@ distinguish `not-yet-active` from `window-expired`.
 > does not qualify — so a catch-all with `afterMs: 60000` does not block the rules behind it during
 > those 60 seconds. That makes "let A apply for 30 s, then switch to B" expressible with two rules.
 
+### Quota scope: stop devices from stealing each other's quota
+
+`maxHits` is a **global quota** by default, first come first served. That gets painful with several
+devices under test:
+
+```
+Rule: maxHits = 2, testing "fail twice then succeed"
+Device A runs once  →  A burns the whole quota
+Device B runs       →  nothing fails; looks like "the fault was never configured"
+```
+
+Adding `maxHitsScope: "device"` gives **each device its own quota**:
+
+```jsonc
+{ "maxHits": 2, "maxHitsScope": "device" }
+```
+
+The device identifier comes from `?deviceId=` on the request (hot-update requests already carry it
+for gray grouping), so the client needs no changes. **Requests without a `deviceId` share one
+bucket** — the behaviour stays deterministic instead of turning into "everyone gets a quota".
+
+| Scope | Meaning |
+|---|---|
+| `global` (default) | one shared quota |
+| `device` | one quota per device |
+
+The rule list spells out each device's usage (`dev-A:2✓ dev-B:1`, where ✓ means that device has
+used up its quota).
+
+> A deliberate design point: **`device` scope is never reported as "quota exhausted"**. The devices
+> seen so far may be used up, but a new device can still fire — so "exhausted" is not a global fact
+> here, and claiming it would only mislead. The panel instead reports *which* devices are used up.
+
 ### Which Rule Wins When Several Match
 
 **The first eligible rule in the list decides.**

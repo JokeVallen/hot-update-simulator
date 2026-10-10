@@ -137,6 +137,18 @@ export class FaultsView extends View {
       ? `${hits} / ${maxHits}`
       : `${hits}`
 
+    // 设备作用域下光看一个数字不够 —— 把每台设备的用量摊开
+    let deviceBadge = ''
+    if (rule.maxHitsScope === 'device') {
+      const byDevice = rule.hitsByDevice || {}
+      const exhausted = Array.isArray(rule.exhaustedDevices) ? rule.exhaustedDevices : []
+      const parts = Object.entries(byDevice)
+        .map(([d, n]) => `${d}:${n}${exhausted.includes(d) ? '✓' : ''}`)
+      deviceBadge = `<span class="badge text-bg-light text-dark ms-1"
+        title="${esc(t('faults.scopeDeviceHint', { n: maxHits || '∞' }))}">
+        ${esc(t('faults.scopeDevice'))}${parts.length ? ` · ${esc(parts.join(' '))}` : ''}</span>`
+    }
+
     // 时间窗状态的角标。文字由 tickTimeBadges() 持续刷新，
     // 所以这里记下渲染时刻的剩余量，之后靠本地流逝时间推算。
     let timeBadge = ''
@@ -164,7 +176,7 @@ export class FaultsView extends View {
               data-rule-toggle="${esc(rule.id)}" ${rule.enabled === false ? '' : 'checked'}>
           </div>
           <div class="flex-grow-1 min-width-0">
-            <div class="rule-name">${esc(rule.name || rule.id)}${timeBadge}</div>
+            <div class="rule-name">${esc(rule.name || rule.id)}${deviceBadge}${timeBadge}</div>
             <div class="rule-meta">${esc(matchText)}</div>
             <div class="rule-meta text-warning">${esc(actionParts.join('  '))}</div>
           </div>
@@ -329,6 +341,16 @@ export class FaultsView extends View {
             <input type="number" class="form-control form-control-sm" id="feMaxHits"
               value="${esc(rule.maxHits)}" min="0" step="1">
             <div class="form-text">${esc(t('faults.maxHitsHint'))}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small mb-1">${esc(t('faults.maxHitsScope'))}</label>
+            <select class="form-select form-select-sm" id="feMaxHitsScope">
+              <option value="global" ${rule.maxHitsScope === 'device' ? '' : 'selected'}>
+                ${esc(t('faults.scopeGlobal'))}</option>
+              <option value="device" ${rule.maxHitsScope === 'device' ? 'selected' : ''}>
+                ${esc(t('faults.scopeDevice'))}</option>
+            </select>
+            <div class="form-text">${esc(t('faults.maxHitsScopeHint'))}</div>
           </div>
           <div class="col-6 col-md-3">
             <label class="form-label small mb-1">${esc(t('faults.afterMs'))}</label>
@@ -536,6 +558,7 @@ export class FaultsView extends View {
       enabled: this.editing.enabled !== false,
       probability: num('#feProbability', 1),
       maxHits: num('#feMaxHits', 0),
+      maxHitsScope: value('#feMaxHitsScope') === 'device' ? 'device' : 'global',
       afterMs: num('#feAfterMs', 0),
       forMs: num('#feForMs', 0),
       match: {
