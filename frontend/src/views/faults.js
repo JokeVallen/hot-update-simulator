@@ -23,6 +23,38 @@ export class FaultsView extends View {
     super('faults')
     /** 正在编辑的规则；null 表示编辑器关闭 */
     this.editing = null
+    /** 倒计时角标的位置与剩余量，由 rulesHtml() 填充、tickTimeBadges() 消费 */
+    this.timeMarks = []
+  }
+
+  /**
+   * 时间维度的倒计时要动。
+   *
+   * 做法是**只改角标文字**，不重建列表：
+   *   * 重建会丢事件绑定，也会把正在编辑的输入框清掉
+   *   * 倒计时由客户端自己算（渲染时的剩余量 + 本地流逝时间），
+   *     所以不需要为此提高轮询频率
+   */
+  async setup() {
+    this.every(250, () => this.tickTimeBadges())
+  }
+
+  /** 只刷新带时间窗的角标文字。 */
+  tickTimeBadges() {
+    if (!this.container || !this.timeMarks || !this.timeMarks.length) return
+    const now = Date.now()
+    for (const mark of this.timeMarks) {
+      const el = this.container.querySelector(`[data-time-badge="${mark.id}"]`)
+      if (!el) continue
+      const elapsed = now - mark.renderedAt
+      if (mark.kind === 'pending') {
+        const left = Math.max(0, mark.activatesInMs - elapsed)
+        el.textContent = t('faults.activatesIn', { s: Math.ceil(left / 1000) })
+      } else if (mark.kind === 'active') {
+        const left = Math.max(0, mark.expiresInMs - elapsed)
+        el.textContent = t('faults.expiresIn', { s: Math.ceil(left / 1000) })
+      }
+    }
   }
 
   async render() {
@@ -41,6 +73,10 @@ export class FaultsView extends View {
           </label>
         </div>
         <span class="spacer flex-grow-1"></span>
+        <button class="btn btn-sm btn-outline-secondary" id="faultRestartClock"
+          title="${esc(t('faults.restartClockHint'))}">
+          <i class="bi bi-stopwatch"></i> ${esc(t('faults.restartClock'))}
+        </button>
         <button class="btn btn-sm btn-outline-secondary" id="faultResetCounters">
           <i class="bi bi-arrow-counterclockwise"></i> ${esc(t('faults.resetCounters'))}
         </button>
@@ -65,6 +101,8 @@ export class FaultsView extends View {
   }
 
   rulesHtml(rules) {
+    // 每次渲染都重算一遍角标位置，避免旧的引用留在列表里
+    this.timeMarks = []
     if (!rules.length) return emptyState(t('faults.empty'))
 
     return `
@@ -99,6 +137,25 @@ export class FaultsView extends View {
       ? `${hits} / ${maxHits}`
       : `${hits}`
 
+    // 时间窗状态的角标。文字由 tickTimeBadges() 持续刷新，
+    // 所以这里记下渲染时刻的剩余量，之后靠本地流逝时间推算。
+    let timeBadge = ''
+    if (rule.timeState === 'pending' && rule.activatesInMs !== undefined) {
+      this.timeMarks.push({
+        id: rule.id, kind: 'pending', activatesInMs: rule.activatesInMs, renderedAt: Date.now(),
+      })
+      timeBadge = `<span class="badge text-bg-info ms-1" data-time-badge="${esc(rule.id)}">`
+        + `${esc(t('faults.activatesIn', { s: Math.ceil(rule.activatesInMs / 1000) }))}</span>`
+    } else if (rule.timeState === 'active' && rule.expiresInMs !== undefined) {
+      this.timeMarks.push({
+        id: rule.id, kind: 'active', expiresInMs: rule.expiresInMs, renderedAt: Date.now(),
+      })
+      timeBadge = `<span class="badge text-bg-success ms-1" data-time-badge="${esc(rule.id)}">`
+        + `${esc(t('faults.expiresIn', { s: Math.ceil(rule.expiresInMs / 1000) }))}</span>`
+    } else if (rule.timeState === 'expired') {
+      timeBadge = `<span class="badge text-bg-secondary ms-1">${esc(t('faults.windowExpired'))}</span>`
+    }
+
     return `
       <div class="rule-item ${rule.enabled === false ? 'disabled' : ''}" data-rule-id="${esc(rule.id)}">
         <div class="d-flex align-items-start gap-2">
@@ -107,7 +164,7 @@ export class FaultsView extends View {
               data-rule-toggle="${esc(rule.id)}" ${rule.enabled === false ? '' : 'checked'}>
           </div>
           <div class="flex-grow-1 min-width-0">
-            <div class="rule-name">${esc(rule.name || rule.id)}</div>
+            <div class="rule-name">${esc(rule.name || rule.id)}${timeBadge}</div>
             <div class="rule-meta">${esc(matchText)}</div>
             <div class="rule-meta text-warning">${esc(actionParts.join('  '))}</div>
           </div>
@@ -167,6 +224,18 @@ export class FaultsView extends View {
         action: { type: 'abort', status: 500, delayMs: 0, ratio: 0.5, body: '' },
       }
       this.render()
+    })
+
+    this.container.querySelector('#faultRestartClock').addEventListener('click', async () => {
+      try {
+        await api.control.restartClock()
+        await loadControl()
+        if (!this.isActive()) return
+        toastSuccess(t('faults.clockRestarted'))
+        this.render()
+      } catch (err) {
+        reportError(err, t('toast.actionFailed'))
+      }
     })
 
     this.container.querySelector('#faultResetCounters').addEventListener('click', async () => {
@@ -260,6 +329,18 @@ export class FaultsView extends View {
             <input type="number" class="form-control form-control-sm" id="feMaxHits"
               value="${esc(rule.maxHits)}" min="0" step="1">
             <div class="form-text">${esc(t('faults.maxHitsHint'))}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small mb-1">${esc(t('faults.afterMs'))}</label>
+            <input type="number" class="form-control form-control-sm" id="feAfterMs"
+              value="${esc(rule.afterMs || 0)}" min="0" step="100">
+            <div class="form-text">${esc(t('faults.afterMsHint'))}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small mb-1">${esc(t('faults.forMs'))}</label>
+            <input type="number" class="form-control form-control-sm" id="feForMs"
+              value="${esc(rule.forMs || 0)}" min="0" step="100">
+            <div class="form-text">${esc(t('faults.forMsHint'))}</div>
           </div>
         </div>
 
@@ -455,6 +536,8 @@ export class FaultsView extends View {
       enabled: this.editing.enabled !== false,
       probability: num('#feProbability', 1),
       maxHits: num('#feMaxHits', 0),
+      afterMs: num('#feAfterMs', 0),
+      forMs: num('#feForMs', 0),
       match: {
         method: value('#feMethod'),
         pathPrefix: value('#fePathPrefix').trim(),

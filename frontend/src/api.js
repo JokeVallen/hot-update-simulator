@@ -164,6 +164,8 @@ export const api = {
       remove: (id) => json(`/api/control/fault/rules/${id}`, { method: 'DELETE' }),
     },
     resetCounters: () => json('/api/control/fault/reset-counters', { method: 'POST' }),
+    /** 重置场景时钟：配置不动，把 afterMs / forMs 的时间线重跑一遍。 */
+    restartClock: () => json('/api/control/fault/restart-clock', { method: 'POST' }),
     /** 热更发布配置（渠道与灰度）。部分更新，数组字段整体替换。 */
     patchHotUpdate: (patch) => json('/api/control/hotupdate', { method: 'PATCH', body: patch }),
     /** 急停：关掉全部模拟。界面卡住时的救命按钮。 */

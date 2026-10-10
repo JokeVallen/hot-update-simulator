@@ -45,6 +45,34 @@ const faultRule = require('../core/faultRule');
 
 const { FAULT_TYPES, ACTION_FIELDS } = faultRule;
 
+/**
+ * 一条规则在场景时钟的第 elapsed 毫秒处于什么状态。
+ *
+ * 语义：
+ *   * `afterMs` —— 配好之后多久才开始生效（0 = 立刻）
+ *   * `forMs`   —— 生效多久之后自动失效（0 = 一直有效）
+ *
+ * 时钟起点见 FaultInjector.clockStartedAt。
+ *
+ * @returns {{state:'always'|'pending'|'active'|'expired', activatesInMs?:number, expiresInMs?:number}}
+ */
+function timeStateOf(rule, elapsed) {
+  const afterMs = Number(rule.afterMs) || 0;
+  const forMs = Number(rule.forMs) || 0;
+
+  if (afterMs > 0 && elapsed < afterMs) {
+    return { state: 'pending', activatesInMs: afterMs - elapsed };
+  }
+  if (forMs > 0 && elapsed >= afterMs + forMs) {
+    return { state: 'expired' };
+  }
+  if (afterMs === 0 && forMs === 0) return { state: 'always' };
+  return {
+    state: 'active',
+    ...(forMs > 0 ? { expiresInMs: afterMs + forMs - elapsed } : {}),
+  };
+}
+
 class FaultInjector {
   constructor(configManager) {
     this.configManager = configManager;
@@ -58,7 +86,56 @@ class FaultInjector {
     this._compiled = null;
     this._compiledFrom = null;
 
-    this.configManager.on('change', () => { this._compiled = null; });
+    /**
+     * 场景时钟的起点。规则的 `afterMs` / `forMs` 都相对它计算。
+     *
+     * 为什么需要一个显式的时钟，而不是"相对服务器启动"或"相对首个请求"：
+     *   * 相对服务器启动 —— 你改完规则往往已经过了很久，`afterMs: 30000`
+     *     会立刻就是"已过期"，完全不是你要的
+     *   * 相对首个匹配请求 —— 什么时候开始取决于客户端行为，不可预测
+     *
+     * 所以取**故障相关配置被改动的那一刻**：你点了"应用"，就表示场景从此刻开始。
+     * 这与直觉一致，而且可预测。想不改配置重跑，用 restartClock()。
+     */
+    this.clockStartedAt = Date.now();
+    /** 上一次见到的故障配置指纹，用来判断"这次改动是不是故障相关的"。 */
+    this._faultFingerprint = null;
+
+    this.configManager.on('change', () => {
+      this._compiled = null;
+      this._maybeRestartClock();
+    });
+  }
+
+  /**
+   * 故障相关配置变了就重置场景时钟。
+   *
+   * 只对**故障那部分**的改动敏感：改网络参数不该把故障场景的时间线重置掉，
+   * 那会让人在调弱网时莫名其妙地"故障又不触发了"。
+   */
+  _maybeRestartClock() {
+    const fault = this.configManager.get('fault') || {};
+    const fingerprint = JSON.stringify({ enabled: fault.enabled, rules: fault.rules });
+    if (this._faultFingerprint === null) {
+      this._faultFingerprint = fingerprint;
+      return;
+    }
+    if (fingerprint !== this._faultFingerprint) {
+      this._faultFingerprint = fingerprint;
+      this.clockStartedAt = Date.now();
+    }
+  }
+
+  /** 手动重置场景时钟（不改配置也能重跑一遍时间线）。 */
+  restartClock() {
+    this.clockStartedAt = Date.now();
+    return this.clockState();
+  }
+
+  /** 场景时钟的当前状态。 */
+  clockState() {
+    const elapsedMs = Date.now() - this.clockStartedAt;
+    return { startedAt: this.clockStartedAt, elapsedMs };
   }
 
   /** 当前是否启用注入（总开关）。 */
@@ -130,16 +207,20 @@ class FaultInjector {
   describeRules() {
     const faultEnabled = this.isEnabled();
     const compiled = this.compiled();
+    const elapsed = Date.now() - this.clockStartedAt;
 
     const maxHitsOf = (rule) => Number(rule.maxHits) || 0;
     const exhausted = (entry) => maxHitsOf(entry.rule) > 0
       && this.getHitCount(entry.key) >= maxHitsOf(entry.rule);
 
-    // 找第一条「无条件匹配」且当前会生效的规则的下标 —— 它会挡住后面所有规则
+    // 找第一条「无条件匹配」且当前会生效的规则的下标 —— 它会挡住后面所有规则。
+    // 时间维度也要算进来：还没开始生效的 catch-all 挡不住任何人。
     let shadowFrom = -1;
     for (const entry of compiled) {
       if (entry.rule.enabled === false) continue;
       if (exhausted(entry)) continue;
+      if (timeStateOf(entry.rule, elapsed).state !== 'always'
+        && timeStateOf(entry.rule, elapsed).state !== 'active') continue;
       const unconditional = (!entry.methods || entry.methods.length === 0)
         && (!entry.prefixes || entry.prefixes.length === 0)
         && (!entry.globs || entry.globs.length === 0)
@@ -152,10 +233,13 @@ class FaultInjector {
 
     return compiled.map((entry) => {
       const hits = this.getHitCount(entry.key);
+      const timing = timeStateOf(entry.rule, elapsed);
 
       let reason = 'ok';
       if (!faultEnabled) reason = 'master-off';
       else if (entry.rule.enabled === false) reason = 'rule-disabled';
+      else if (timing.state === 'pending') reason = 'not-yet-active';
+      else if (timing.state === 'expired') reason = 'window-expired';
       else if (exhausted(entry)) reason = 'max-hits-reached';
       else if (shadowFrom >= 0 && entry.index > shadowFrom) reason = 'shadowed';
 
@@ -167,6 +251,10 @@ class FaultInjector {
         // “为什么我建了规则却什么都没发生”（总闸没开是最常见的原因）。
         effective: reason === 'ok',
         effectiveReason: reason,
+        // 时间维度的实时状态，供界面倒计时
+        timeState: timing.state,
+        ...(timing.activatesInMs !== undefined ? { activatesInMs: timing.activatesInMs } : {}),
+        ...(timing.expiresInMs !== undefined ? { expiresInMs: timing.expiresInMs } : {}),
         // 被挡住的规则按定义永远不会触发。挡它的那条一并给出，界面可以直接指过去。
         ...(reason === 'shadowed' ? { shadowedBy: compiled[shadowFrom].rule.id } : {}),
       };
@@ -177,12 +265,15 @@ class FaultInjector {
    * 决定这次请求注入什么。纯决策，不产生副作用（除了命中计数）。
    *
    * 规则选取语义（很重要，直接决定了 probability 的含义）：
-   *   1. 跳过「不合格」的规则：未启用、已知不匹配、maxHits 已用完；
+   *   1. 跳过「不合格」的规则：未启用、不满足匹配、**不在时间窗内**、maxHits 已用完；
    *   2. 第一条「合格」的规则拥有决定权 —— 掷一次骰子：
    *        命中 → 注入它；没命中 → **本次不注入任何故障**（不再往下找）。
    *
    * 第 2 步不能再 `continue`：那样 N 条各 50% 的规则会让总命中率变成
    * 1-(1-0.5)^N ≈ 75%（N=2），probability 就完全不是它字面上的意思了。
+   *
+   * 时间窗外的规则按「不合格」处理（`continue`），这和"未启用"是同一类：
+   * 它此刻确实不该参与决策，而不是掷输了。
    *
    * @returns {{delayMs:number, respond:Function|null, shape:object|null, rule:object|null}}
    */
@@ -192,11 +283,16 @@ class FaultInjector {
 
     const url = String(req.originalUrl || req.url || '');
     const method = String(req.method || 'GET').toUpperCase();
+    const elapsed = Date.now() - this.clockStartedAt;
 
     for (const entry of this.compiled()) {
       const rule = entry.rule;
       if (rule.enabled === false) continue;
       if (!entry.test(url, method)) continue;
+
+      // 时间维度：还没到点、或窗口已过 —— 都不合格，看下一条
+      const timing = timeStateOf(rule, elapsed);
+      if (timing.state === 'pending' || timing.state === 'expired') continue;
 
       // platform 是单独的维度：它在 URL 里而不是可前缀化的字段
       if (entry.platforms) {

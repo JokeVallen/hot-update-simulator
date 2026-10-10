@@ -1013,6 +1013,131 @@ async function testAssetEdgeCases() {
     check('实测被遮挡的规则确实不触发（拿到的是挡它的那条的 503）',
       shadowHit.status === 503, `状态 ${shadowHit.status}`);
 
+    // ---------------- 时间维度（2.5.0） ----------------
+    //
+    // 时钟的起点是"故障配置被改动的那一刻"（点应用 = 场景从此刻开始）。
+    // 这里用很短的毫秒数，免得测试变慢。
+    section('故障的时间维度');
+
+    /** 时间维度的测试必须真的等，所以这里要一个 sleep。 */
+    const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+
+    const clockOf = async () => JSON.parse(
+      (await request(port, '/api/control/fault/rules')).body.toString(),
+    );
+
+    // ---- afterMs：到点之前不生效 ----
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', mkRule('t-pending', { afterMs: 600 }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    let listing2 = await clockOf();
+    check('规则接受 afterMs / forMs 两个时间字段',
+      listing2.rules[0].afterMs === 600 && listing2.rules[0].forMs === 0,
+      `afterMs=${listing2.rules[0].afterMs} forMs=${listing2.rules[0].forMs}`);
+    check('未到点时 effectiveReason 是 not-yet-active',
+      listing2.rules[0].effectiveReason === 'not-yet-active', listing2.rules[0].effectiveReason);
+    check('未到点时给出激活倒计时',
+      typeof listing2.rules[0].activatesInMs === 'number' && listing2.rules[0].activatesInMs > 0,
+      `activatesInMs=${listing2.rules[0].activatesInMs}`);
+
+    const beforePoint = await request(port, '/api/version?platform=Android&current=1.0.0');
+    check('未到点时请求不被注入（200 而不是 500）',
+      beforePoint.status === 200, `状态 ${beforePoint.status}`);
+
+    await sleep(800);
+    const afterPoint = await request(port, '/api/version?platform=Android&current=1.0.0');
+    check('过了 afterMs 之后开始生效',
+      afterPoint.status === 500, `状态 ${afterPoint.status}`);
+
+    // ---- forMs：到时自动恢复 ----
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules',
+      mkRule('t-window', { forMs: 500, action: { type: 'status', status: 503 } }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const inWindow = await request(port, '/api/version?platform=Android&current=1.0.0');
+    check('窗口内生效', inWindow.status === 503, `状态 ${inWindow.status}`);
+    listing2 = await clockOf();
+    check('窗口内给出失效倒计时',
+      typeof listing2.rules[0].expiresInMs === 'number' && listing2.rules[0].expiresInMs > 0,
+      `expiresInMs=${listing2.rules[0].expiresInMs}`);
+
+    await sleep(700);
+    const outWindow = await request(port, '/api/version?platform=Android&current=1.0.0');
+    listing2 = await clockOf();
+    check('窗口过后自动恢复，不再注入',
+      outWindow.status === 200, `状态 ${outWindow.status}`);
+    check('窗口过后 effectiveReason 是 window-expired',
+      listing2.rules[0].effectiveReason === 'window-expired', listing2.rules[0].effectiveReason);
+
+    // ---- 场景时钟 ----
+    const clock1 = await clockOf();
+    check('GET /fault/rules 带场景时钟',
+      clock1.clock && typeof clock1.clock.startedAt === 'number' && typeof clock1.clock.elapsedMs === 'number',
+      JSON.stringify(clock1.clock));
+
+    const restarted = JSON.parse(
+      (await request(port, '/api/control/fault/restart-clock', { method: 'POST' })).body.toString(),
+    );
+    check('restart-clock 把起点推到现在，时间线可以重跑',
+      restarted.clock.elapsedMs < 200, `elapsedMs=${restarted.clock.elapsedMs}`);
+
+    // 改网络参数不该重置故障时钟（否则调弱网时故障会莫名其妙重来）
+    const clockBeforeNet = (await clockOf()).clock.startedAt;
+    await request(port, '/api/control/network', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latencyMs: 40 }),
+    });
+    check('改网络参数不会重置故障场景时钟',
+      (await clockOf()).clock.startedAt === clockBeforeNet, '时钟被重置了');
+    await request(port, '/api/control/network', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latencyMs: 0 }),
+    });
+
+    // ---- 时间窗外的 catch-all 不该遮挡别人 ----
+    await clearFaults(port);
+    await postJson(port, '/api/control/fault/rules', {
+      id: 't-later-catch-all', enabled: true, probability: 1, afterMs: 60000,
+      match: {}, action: { type: 'status', status: 500 },
+    });
+    await postJson(port, '/api/control/fault/rules',
+      mkRule('t-not-shadowed', { action: { type: 'status', status: 504 } }));
+    await request(port, '/api/control/fault', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    listing2 = await clockOf();
+    const notShadowed = listing2.rules.find((r) => r.id === 't-not-shadowed');
+    check('还没生效的 catch-all 不算遮挡（时间窗外的规则挡不住人）',
+      notShadowed.effectiveReason === 'ok' && notShadowed.shadowedBy === undefined,
+      `${notShadowed.effectiveReason} shadowedBy=${notShadowed.shadowedBy}`);
+    const nsHit = await request(port, '/api/version?platform=Android&current=1.0.0');
+    check('实测拿到的是后面那条（504），说明确实没被未生效的 catch-all 挡',
+      nsHit.status === 504, `状态 ${nsHit.status}`);
+
+    // ---- 越界值被夹住 ----
+    const clamped = await postJson(port, '/api/control/fault/rules', {
+      id: 't-clamp', enabled: true, probability: 1, afterMs: -5, forMs: 999999999,
+      match: { pathPrefix: '/x' }, action: { type: 'status', status: 500 },
+    });
+    check('负数 afterMs 夹到 0、超大 forMs 夹到上限（24 小时）',
+      clamped.status === 201
+        && JSON.parse(clamped.body.toString()).rule.afterMs === 0
+        && JSON.parse(clamped.body.toString()).rule.forMs === 86400000,
+      JSON.stringify(JSON.parse(clamped.body.toString()).rule));
+
     await clearFaults(port);
 
     // ---------------- 模拟范围：不能把控制面板自己搞坏 ----------------

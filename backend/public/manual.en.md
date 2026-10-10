@@ -570,6 +570,45 @@ a truncated transfer means the connection drops immediately**.
 > If you want the "connection cut" symptom, use `abort`; if you want to cover *both* client paths
 > (hanging vs. failing fast) in one scenario, add both rules.
 
+### Time dimension: make a fault start late and heal itself
+
+`afterMs` and `forMs` are two offsets relative to the **scenario clock**:
+
+| Field | Meaning |
+|---|---|
+| `afterMs` | How long after applying this the rule starts to apply. `0` = immediately |
+| `forMs` | How long it stays in effect before recovering on its own. `0` = forever |
+
+```jsonc
+{ "afterMs": 30000 }              // start dropping the connection 30 s after applying
+{ "forMs": 10000 }                // start now, recover by itself after 10 s
+{ "afterMs": 5000, "forMs": 20000 }  // starts at 5 s, lasts 20 s
+```
+
+**What the scenario clock is**: its origin is *the moment the fault config changed* — clicking
+Apply in the panel, switching presets, or editing any fault rule means the scenario starts now.
+
+Why not "since server start" or "since the first request":
+
+- since server start — by the time you finish editing, `afterMs: 30000` is often already in the
+  past, which is not what you meant at all
+- since the first request — when it starts depends on client behaviour, so it is unpredictable
+
+It is **only sensitive to fault-related changes**: editing network parameters (latency, bandwidth)
+does **not** reset the clock. Otherwise your timeline would restart at random while you were
+tuning a weak network.
+
+To replay the timeline without touching the config, use the panel's "Restart timeline" button or
+`POST /api/control/fault/restart-clock`.
+
+The rule list shows a live countdown ("active in 12s" / "recovers in 8s"), and the failure reasons
+distinguish `not-yet-active` from `window-expired`.
+
+> One easy-to-miss consequence: **a rule that has not started yet does not shadow anything.**
+> The match semantics are "the first *qualifying* rule decides", and a rule outside its time window
+> does not qualify — so a catch-all with `afterMs: 60000` does not block the rules behind it during
+> those 60 seconds. That makes "let A apply for 30 s, then switch to B" expressible with two rules.
+
 ### Which Rule Wins When Several Match
 
 **The first eligible rule in the list decides.**
@@ -747,6 +786,7 @@ public class HotUpdateClient : MonoBehaviour
 | GET/POST | `/api/control/fault/rules` | List / add fault rules |
 | PUT/DELETE | `/api/control/fault/rules/{id}` | Update / delete a rule |
 | POST | `/api/control/fault/reset-counters` | Zero the hit counts on rules |
+| POST | `/api/control/fault/restart-clock` | Restart the scenario clock used by `afterMs` / `forMs` |
 | PATCH | `/api/control/hotupdate` | Edit channels and gray release (`channels` / `defaultChannel` / `gray`). Partial update; array fields are replaced wholesale, and anything normalised away is reported in `notes` |
 | POST | `/api/control/disable` | **Panic**: turn off all simulation |
 | POST | `/api/control/reset` | Reset everything to defaults |

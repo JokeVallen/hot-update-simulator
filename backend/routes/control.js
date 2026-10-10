@@ -36,6 +36,9 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
       fault: {
         enabled: cfg.fault.enabled,
         rules: faultInjector.describeRules(),
+        // 场景时钟：规则的 afterMs / forMs 都相对它算起。
+        // 起点是"故障配置被改动的那一刻"，另可用 restart-clock 手动重置。
+        clock: faultInjector.clockState(),
       },
       hotUpdate: cfg.hotUpdate,
       assetRoot: assetServer.root(),
@@ -153,6 +156,8 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
       // 总闸状态必须给出来。每条的 effective 都带原因（effectiveReason），
       // 但"总闸没开"是最常见的那一种，放在顶层最省事 —— 也是和 POST 对齐。
       faultEnabled,
+      // 场景时钟：界面要靠它显示"还有几秒生效 / 几秒后恢复"
+      clock: faultInjector.clockState(),
       // 顺带把计数摘要给出来，界面/脚本不用自己数
       totalRules: rules.length,
       effectiveRules: rules.filter((r) => r.effective).length,
@@ -271,6 +276,23 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
   router.post('/fault/reset-counters', (req, res) => {
     faultInjector.resetHitCounts();
     res.json({ ok: true, rules: faultInjector.describeRules() });
+  });
+
+  /**
+   * @openapi
+   * /api/control/fault/restart-clock:
+   *   post:
+   *     tags: [控制]
+   *     summary: 重置场景时钟
+   *     description: |
+   *       规则的 `afterMs` / `forMs` 都相对场景时钟计算，而时钟在**故障配置
+   *       被改动时自动重置**。这个端点用于"配置不动、只想把时间线重跑一遍"。
+   *     responses:
+   *       200: { description: 已重置，返回新的起点与已过时间 }
+   */
+  router.post('/fault/restart-clock', (req, res) => {
+    const clock = faultInjector.restartClock();
+    res.json({ ok: true, clock, rules: faultInjector.describeRules() });
   });
 
   /**

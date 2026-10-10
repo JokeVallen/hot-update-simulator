@@ -553,6 +553,45 @@ curl "http://localhost:5500/api/version?platform=Android&channel=beta"
 > 想要"连接被直接截断"那种更像 `abort` 的症状，就用 `abort`；
 > 想在**同一个场景里**同时覆盖"卡住"和"立刻失败"两种客户端路径，两条都加。
 
+### 时间维度：让故障"晚点来"和"自己好"
+
+`afterMs` 与 `forMs` 是相对**场景时钟**的两个偏移量：
+
+| 字段 | 含义 |
+|---|---|
+| `afterMs` | 配好之后过这么久才开始生效。`0` = 立刻 |
+| `forMs` | 生效这么久之后自动失效，客户端随即恢复正常。`0` = 一直有效 |
+
+```jsonc
+{ "afterMs": 30000 }              // 配好 30 秒后开始断网
+{ "forMs": 10000 }                // 立刻开始，持续 10 秒后自己恢复
+{ "afterMs": 5000, "forMs": 20000 }  // 5 秒后开始，持续 20 秒
+```
+
+**场景时钟是什么**：它的起点是**故障配置被改动的那一刻** ——
+你在面板上点了「应用」、切了预置方案、或改了任何一条故障规则，
+就表示场景从此刻开始。
+
+为什么不做成"相对服务器启动"或"相对第一个请求"：
+
+- 相对服务器启动 —— 你改完规则时往往已经过了很久，`afterMs: 30000`
+  会立刻就是"已过期"，完全不是你要的
+- 相对第一个请求 —— 什么时候开始取决于客户端行为，不可预测
+
+**只对故障相关的改动敏感**：改网络参数（延迟、带宽）**不会**重置时钟。
+否则你在调弱网的时候，时间线会莫名其妙地重来一遍。
+
+想不改配置就把时间线重跑一遍，用面板上的「重跑时间线」按钮，
+或 `POST /api/control/fault/restart-clock`。
+
+规则列表上会显示实时倒计时（"12 秒后生效" / "8 秒后恢复"），
+失效原因里也会区分 `not-yet-active`（还没到点）和 `window-expired`（窗口已过）。
+
+> 一个容易忽略的推论：**还没到点的规则挡不住别人。**
+> 匹配语义是"第一条合格的决定"，而时间窗外的规则算「不合格」——
+> 所以一条 `afterMs: 60000` 的 catch-all 在这 60 秒内不遮挡后面的规则。
+> 这让"先让 A 生效 30 秒、再换成 B"可以用两条规则叠出来。
+
 ### 多条规则谁生效
 
 **列表里最靠前的、符合条件的规则说了算。**
@@ -730,6 +769,7 @@ public class HotUpdateClient : MonoBehaviour
 | GET/POST | `/api/control/fault/rules` | 列出 / 新增故障规则 |
 | PUT/DELETE | `/api/control/fault/rules/{id}` | 修改 / 删除规则 |
 | POST | `/api/control/fault/reset-counters` | 清零规则的命中次数 |
+| POST | `/api/control/fault/restart-clock` | 重置场景时钟（`afterMs` / `forMs` 的时间线重跑） |
 | PATCH | `/api/control/hotupdate` | 改渠道与灰度（`channels` / `defaultChannel` / `gray`）。部分更新；数组字段整体替换，被规范化掉的部分会在 `notes` 里说明 |
 | POST | `/api/control/disable` | **急停**：关掉全部模拟 |
 | POST | `/api/control/reset` | 全部恢复默认 |

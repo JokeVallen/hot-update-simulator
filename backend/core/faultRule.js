@@ -258,6 +258,12 @@ function normalizeRule(input, index = 0) {
     enabled: input.enabled === undefined ? true : Boolean(input.enabled),
     probability: clampNumber(input.probability, 0, 1, 1),
     maxHits: Math.max(0, Math.round(clampNumber(input.maxHits, 0, 1000000, 0))),
+    // 时间维度：相对「场景时钟」的两个偏移量（毫秒）。
+    //   afterMs —— 配好之后多久才开始生效（0 = 立刻）
+    //   forMs   —— 生效多久之后自动失效（0 = 一直有效）
+    // 上限 24 小时：再长就不该靠模拟器计时了，那属于外部脚本的事。
+    afterMs: Math.max(0, Math.round(clampNumber(input.afterMs, 0, 86400000, 0))),
+    forMs: Math.max(0, Math.round(clampNumber(input.forMs, 0, 86400000, 0))),
     match,
     action,
   };
