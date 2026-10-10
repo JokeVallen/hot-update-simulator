@@ -58,7 +58,7 @@ npm run build && npm start
 
 ## 面板怎么用
 
-打开 `http://localhost:5500/`（需要先 `npm run build`）后，左侧有 10 项——9 个页面，外加一个新标签页打开的 API 文档：
+打开 `http://localhost:5500/`（需要先 `npm run build`）后，左侧有 11 项——10 个页面，外加一个新标签页打开的 API 文档：
 
 | 页面 | 什么时候用 |
 |---|---|
@@ -70,6 +70,7 @@ npm run build && npm start
 | **接口调试** | 现场验证：调一次 `/api/version`，看耗时是不是真的变了 |
 | **收藏** | 存下常用请求反复重放。重放由服务器发起，会完整经过模拟器 |
 | **资产目录** | 把热更包在磁盘上的布局摊开：有哪些平台、各有哪些渠道、资源轨道和代码轨道分别装了什么。排查"文件放对地方了吗"时先看这里 |
+| **发布配置** | 改渠道（渠道名列表 + 默认渠道）和灰度规则。会列出"配置声明的渠道"与"磁盘上实际有的渠道"的对照，对不上会标出来 |
 | **使用手册** | 就是本文件，渲染在面板内并带目录 |
 | **API 文档** | 侧栏项，新标签页打开 Swagger UI |
 
@@ -729,6 +730,7 @@ public class HotUpdateClient : MonoBehaviour
 | GET/POST | `/api/control/fault/rules` | 列出 / 新增故障规则 |
 | PUT/DELETE | `/api/control/fault/rules/{id}` | 修改 / 删除规则 |
 | POST | `/api/control/fault/reset-counters` | 清零规则的命中次数 |
+| PATCH | `/api/control/hotupdate` | 改渠道与灰度（`channels` / `defaultChannel` / `gray`）。部分更新；数组字段整体替换，被规范化掉的部分会在 `notes` 里说明 |
 | POST | `/api/control/disable` | **急停**：关掉全部模拟 |
 | POST | `/api/control/reset` | 全部恢复默认 |
 | GET/POST | `/api/presets` | 列出 / 新建预置方案 |

@@ -275,6 +275,96 @@ module.exports = function createControlRouter({ configManager, faultInjector, as
 
   /**
    * @openapi
+   * /api/control/hotupdate:
+   *   patch:
+   *     tags: [控制]
+   *     summary: 修改热更发布配置（渠道与灰度）
+   *     description: |
+   *       部分更新：只改传进来的字段。
+   *       `channels` 与 `gray.rules` 是**整体替换**（数组不做合并），
+   *       `gray` 的其它字段是局部合并。
+   *     requestBody:
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               channels: { type: array, items: { type: string }, description: 渠道名列表 }
+   *               defaultChannel: { type: string, description: 默认渠道，必须在 channels 里 }
+   *               gray: { type: object, description: 灰度配置（enabled / rules / percent） }
+   *     responses:
+   *       200: { description: 已更新，并回报被规范化掉的部分 }
+   *       400: { description: 参数非法或什么都没传 }
+   */
+  router.patch('/hotupdate', (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    const applied = [];
+
+    if (body.channels !== undefined) {
+      if (!Array.isArray(body.channels)) {
+        return res.status(400).json({ error: 'channels 必须是数组' });
+      }
+      patch.channels = body.channels.map((c) => String(c));
+      applied.push('channels');
+    }
+    if (body.defaultChannel !== undefined) {
+      patch.defaultChannel = String(body.defaultChannel);
+      applied.push('defaultChannel');
+    }
+    if (body.gray !== undefined) {
+      if (!body.gray || typeof body.gray !== 'object' || Array.isArray(body.gray)) {
+        return res.status(400).json({ error: 'gray 必须是对象' });
+      }
+      // rules 是数组 → deepMerge 会整体替换，正是"表单整体提交"想要的语义
+      patch.gray = body.gray;
+      applied.push('gray');
+    }
+
+    if (!applied.length) {
+      return res.status(400).json({
+        error: '没有可更新的字段',
+        hint: '可传 channels / defaultChannel / gray，至少给一个。',
+      });
+    }
+
+    const before = configManager.get('hotUpdate') || {};
+    const cfg = configManager.patch({ hotUpdate: patch });
+    const after = cfg.hotUpdate || {};
+
+    // 规范化可能改掉你提交的值（非法项被丢掉、defaultChannel 被归一）。
+    // 必须如实回报 —— 否则界面显示的是你填的，存下来的却是别的，
+    // 而使用者会照着界面去排查线上行为。
+    const notes = [];
+    if (patch.defaultChannel !== undefined && after.defaultChannel !== patch.defaultChannel) {
+      notes.push(`defaultChannel "${patch.defaultChannel}" 不在 channels 里，`
+        + `已归一成 "${after.defaultChannel}"`);
+    }
+    if (patch.channels !== undefined && after.channels.length !== patch.channels.filter(Boolean).length) {
+      notes.push(`channels 里有 ${patch.channels.length - after.channels.length} 个空值或重复项被去掉了`);
+    }
+    if (patch.gray && Array.isArray(patch.gray.rules)) {
+      const dropped = patch.gray.rules.length - (after.gray.rules || []).length;
+      if (dropped > 0) {
+        notes.push(`gray.rules 里有 ${dropped} 条被丢掉：`
+          + '一条规则至少要写一个条件（devices / channels / platforms / regions / 版本区间 / percent），'
+          + '否则它会匹配所有人');
+      }
+    }
+
+    return res.json({
+      ok: true,
+      applied,
+      hotUpdate: after,
+      ...(notes.length ? { notes } : {}),
+      ...(before.defaultChannel !== after.defaultChannel
+        ? { defaultChannelChanged: { from: before.defaultChannel, to: after.defaultChannel } }
+        : {}),
+    });
+  });
+
+  /**
+   * @openapi
    * /api/control/disable:
    *   post:
    *     tags: [控制]

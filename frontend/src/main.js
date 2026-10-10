@@ -34,6 +34,7 @@ import { ExplorerView } from './views/explorer.js'
 import { FavoritesView } from './views/favorites.js'
 import { ManualView } from './views/manual.js'
 import { AssetsView } from './views/assets.js'
+import { PublishView } from './views/publish.js'
 
 const ROUTES = {
   dashboard: DashboardView,
@@ -44,6 +45,7 @@ const ROUTES = {
   explorer: ExplorerView,
   favorites: FavoritesView,
   assets: AssetsView,
+  publish: PublishView,
   manual: ManualView,
 }
 

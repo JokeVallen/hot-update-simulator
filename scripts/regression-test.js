@@ -1743,6 +1743,89 @@ async function testAssetEdgeCases() {
         (await request(port, '/api/version?platform=Android&current=0.0.1')).body.toString(),
       );
       check('灰度关闭时响应里不带 gray 字段', off.gray === undefined, JSON.stringify(off.gray));
+
+      // ---------------- 发布配置的写入端点（2.4.0） ----------------
+      //
+      // 渠道与灰度在 2.0.0 就完整实现了，但一直只能改 config.json。
+      // 这个端点补上"点一下就能用"，而它的关键设计是**不许静默改掉你提交的值**：
+      // 规范化会调整某些字段，必须如实回报。
+      section('发布配置的写入');
+
+      const patchHot = async (body) => {
+        const r = await request(port, '/api/control/hotupdate', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return { status: r.status, body: JSON.parse(r.body.toString()) };
+      };
+
+      // 什么都没传 → 400，别假装成功
+      const noFields = await patchHot({});
+      check('一个字段都不传时 400（不假装成功）',
+        noFields.status === 400 && /没有可更新的字段/.test(noFields.body.error),
+        `${noFields.status} ${noFields.body.error}`);
+
+      // channels 不是数组 → 400
+      const badChannels = await patchHot({ channels: 'default,beta' });
+      check('channels 不是数组时 400',
+        badChannels.status === 400, `${badChannels.status} ${badChannels.body.error}`);
+
+      // 正常改渠道
+      const setCh = await patchHot({ channels: ['default', 'beta'] });
+      check('能改渠道列表', setCh.status === 200
+        && setCh.body.hotUpdate.channels.join(',') === 'default,beta',
+        JSON.stringify(setCh.body.hotUpdate && setCh.body.hotUpdate.channels));
+
+      // defaultChannel 不在列表里 → 被归一，并且**必须回报**
+      const norm = await patchHot({ defaultChannel: 'nosuchchannel' });
+      check('defaultChannel 不在渠道列表里时被归一',
+        norm.status === 200 && norm.body.hotUpdate.defaultChannel === 'default',
+        `defaultChannel=${norm.body.hotUpdate && norm.body.hotUpdate.defaultChannel}`);
+      check('归一这件事必须如实回报（否则界面显示的和存下来的不是一回事）',
+        Array.isArray(norm.body.notes) && norm.body.notes.some((n) => /归一/.test(n)),
+        JSON.stringify(norm.body.notes));
+      // 提交的非法值被归一**回到原值**时，净变化是零 —— 不该报"默认渠道变了"。
+      // 两件事都要说清：归一发生了（notes），但生效值没变（没有 defaultChannelChanged）。
+      check('净变化为零时不谎报"默认渠道变了"（由 notes 说明归一即可）',
+        norm.body.defaultChannelChanged === undefined,
+        JSON.stringify(norm.body.defaultChannelChanged));
+
+      // 真正的变更要报出来（改默认渠道会影响客户端拿到哪个渠道的内容）
+      const realChange = await patchHot({ defaultChannel: 'beta' });
+      check('默认渠道真的变了时给出前后值',
+        realChange.body.defaultChannelChanged
+          && realChange.body.defaultChannelChanged.from === 'default'
+          && realChange.body.defaultChannelChanged.to === 'beta',
+        JSON.stringify(realChange.body.defaultChannelChanged));
+
+      // gray.rules 是数组 → 整体替换，不是合并
+      await patchHot({ gray: { enabled: true, percent: 0, rules: [{ name: 'a', devices: ['x'] }] } });
+      const replaced = await patchHot({ gray: { rules: [{ name: 'b', channels: ['default'] }] } });
+      check('gray.rules 是整体替换而不是合并（表单整体提交的语义）',
+        replaced.body.hotUpdate.gray.rules.length === 1
+          && replaced.body.hotUpdate.gray.rules[0].name === 'b',
+        JSON.stringify(replaced.body.hotUpdate.gray.rules.map((x) => x.name)));
+      check('只传 gray.rules 时 enabled 不被清掉（gray 内部是局部合并）',
+        replaced.body.hotUpdate.gray.enabled === true,
+        `enabled=${replaced.body.hotUpdate.gray.enabled}`);
+
+      // 没有条件的规则会被丢掉 —— 而且要说出来丢了几条
+      const dropped = await patchHot({
+        gray: {
+          rules: [
+            { name: 'good', devices: ['dev-1'] },
+            { name: 'empty-1' },
+            { name: 'empty-2', percent: 0 },
+          ],
+        },
+      });
+      check('没有条件的灰度规则被丢掉（否则它会匹配所有人）',
+        dropped.body.hotUpdate.gray.rules.length === 1,
+        `${dropped.body.hotUpdate.gray.rules.length} 条`);
+      check('丢了几条也要说出来',
+        Array.isArray(dropped.body.notes) && dropped.body.notes.some((n) => /丢掉/.test(n)),
+        JSON.stringify(dropped.body.notes));
     } finally {
       app.locals.configManager.patch({ hotUpdate: prevHotUpdate });
       await removeDir(chanDir);

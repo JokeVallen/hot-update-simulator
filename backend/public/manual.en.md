@@ -58,7 +58,7 @@ remember to add the matching manual file and an entry in the `MANUAL_FILES` whit
 
 ## Using the Panel
 
-Once `http://localhost:5500/` is open (run `npm run build` first), the left sidebar has 10 entries — 9 pages plus an API docs link that opens in a new tab:
+Once `http://localhost:5500/` is open (run `npm run build` first), the left sidebar has 11 entries — 10 pages plus an API docs link that opens in a new tab:
 
 | Page | When to use it |
 |---|---|
@@ -70,6 +70,7 @@ Once `http://localhost:5500/` is open (run `npm run build` first), the left side
 | **API Console** | Verify on the spot: call `/api/version` once and see whether the timing really changed |
 | **Favorites** | Save frequently used requests and replay them over and over. Replay is issued by the server, so it goes through the simulator in full |
 | **Assets** | Lays out how the bundles actually sit on disk: which platforms exist, which channels each has, and what the resource and code tracks contain. Start here when asking "did I put the files in the right place?" |
+| **Release** | Edit channels (the name list plus the default channel) and gray release rules. Cross-checks the channels declared in config against the ones actually present on disk and flags mismatches |
 | **Manual** | This file, rendered inside the panel with a table of contents |
 | **API Docs** | Sidebar item that opens Swagger UI in a new tab |
 
@@ -746,6 +747,7 @@ public class HotUpdateClient : MonoBehaviour
 | GET/POST | `/api/control/fault/rules` | List / add fault rules |
 | PUT/DELETE | `/api/control/fault/rules/{id}` | Update / delete a rule |
 | POST | `/api/control/fault/reset-counters` | Zero the hit counts on rules |
+| PATCH | `/api/control/hotupdate` | Edit channels and gray release (`channels` / `defaultChannel` / `gray`). Partial update; array fields are replaced wholesale, and anything normalised away is reported in `notes` |
 | POST | `/api/control/disable` | **Panic**: turn off all simulation |
 | POST | `/api/control/reset` | Reset everything to defaults |
 | GET/POST | `/api/presets` | List / create presets |
