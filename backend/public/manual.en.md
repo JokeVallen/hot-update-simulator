@@ -626,9 +626,16 @@ Adding `maxHitsScope: "device"` gives **each device its own quota**:
 { "maxHits": 2, "maxHitsScope": "device" }
 ```
 
-The device identifier comes from `?deviceId=` on the request (hot-update requests already carry it
-for gray grouping), so the client needs no changes. **Requests without a `deviceId` share one
-bucket** — the behaviour stays deterministic instead of turning into "everyone gets a quota".
+The device identifier comes from `?deviceId=` on the request. **There is an easy trap here**:
+
+- hot-update endpoints like `/api/version` already carry it — **nothing extra to do**
+- but **the asset URLs in the manifest do not carry `deviceId`** — and neither do real CDN URLs
+  in practice. So **if you use device scope on `/assets`, the client must append `deviceId` to the
+  asset URL itself**; otherwise every device shares one anonymous bucket, which reproduces exactly
+  the symptom this feature exists to fix: the first device burns the quota and the rest never fire
+
+**Requests without a `deviceId` share one bucket** — the behaviour stays deterministic instead of
+turning into "everyone gets a quota".
 
 | Scope | Meaning |
 |---|---|
