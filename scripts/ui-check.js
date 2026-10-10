@@ -16,7 +16,7 @@
 //   node scripts/ui-check.js http://127.0.0.1:5500
 
 const { spawn } = require('child_process');
-const { exitAfterFlush } = require('./lib/exit');
+const { finish, isExitSignal } = require('./lib/exit');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -104,7 +104,7 @@ async function main() {
   const browser = findBrowser();
   if (!browser) {
     console.error('找不到 Chrome 或 Edge，无法做界面检查。');
-    exitAfterFlush(2);
+    finish(2);
   }
 
   // 界面检查会点「急停」等按钮，那些操作会真的写进 backend/config.json。
@@ -133,7 +133,7 @@ async function main() {
   } catch (err) {
     console.error(`目标服务 ${TARGET_URL} 不可达：${err.message}`);
     console.error('请先执行 npm start（并确认后端已在 5500 端口运行）。');
-    exitAfterFlush(2);
+    finish(2);
   }
 
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hus-ui-check-'));
@@ -200,7 +200,7 @@ async function main() {
   } catch (err) {
     console.error('连接浏览器失败：', err.message);
     cleanup();
-    exitAfterFlush(1);
+    finish(1);
   }
 
   try {
@@ -705,15 +705,19 @@ async function main() {
 
     cleanup();
     const allGood = passed === ROUTES.length && uniqueProblems.length === 0 && localeOk;
-    exitAfterFlush(allGood ? 0 : 1);
+    finish(allGood ? 0 : 1);
   } catch (err) {
+    // 正常路径的 finish(0) 是靠抛信号中断的，必须放行 ——
+    // 否则会被这里接住、当成"检查自身出错"，再被 finish(1) 覆盖掉退出码。
+    // （实测踩过：21 条断言全过，退出码却是 1。）
+    if (isExitSignal(err)) throw err;
     console.error('\n界面检查自身出错：', err.message);
     if (problems.length) {
       console.error('已捕获的问题：');
       for (const p of [...new Set(problems)]) console.error(`  - ${p}`);
     }
     cleanup();
-    exitAfterFlush(1);
+    finish(1);
   }
 }
 

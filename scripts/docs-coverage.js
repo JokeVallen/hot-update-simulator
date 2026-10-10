@@ -14,7 +14,7 @@
 // 用法：npm run docs-check
 
 const fs = require('fs');
-const { exitAfterFlush } = require('./lib/exit');
+const { finish } = require('./lib/exit');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -159,7 +159,7 @@ function main() {
   for (const [lang, file] of Object.entries(MANUALS)) {
     if (!fs.existsSync(file)) {
       console.error(`缺少手册文件：${file}`);
-      exitAfterFlush(2);
+      finish(2);
     }
     manuals[lang] = read(file);
   }
@@ -286,7 +286,7 @@ function main() {
   }
   console.log('');
 
-  exitAfterFlush(totalGaps === 0 && presetCovered.length >= 3 ? 0 : 1);
+  finish(totalGaps === 0 && presetCovered.length >= 3 ? 0 : 1);
 }
 
 main();

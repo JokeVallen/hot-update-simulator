@@ -22,7 +22,7 @@
 //   npm run release -- --skip-build   # 不重新构建前端（用现有 dist）
 
 const { execFileSync } = require('child_process');
-const { exitAfterFlush } = require('./lib/exit');
+const { finish } = require('./lib/exit');
 const fs = require('fs');
 const path = require('path');
 const { removeDirSync } = require('./lib/safe-rm');
@@ -41,6 +41,22 @@ const STAGE = path.join(OUT_DIR, NAME);
 
 function git(...args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+}
+
+/**
+ * 取 git 跟踪的文件列表，**按字面**原样取。
+ *
+ * 为什么必须加 -z：
+ *   git 默认（core.quotePath=true）会对含非 ASCII 的路径加双引号并转成
+ *   八进制转义，于是 `ls-files` 给出的是 `"\346\250\241..."` 这种字符串。
+ *   拿它当文件名拼路径就直接 ENOENT，而且报错里的路径看着像乱码，
+ *   很难一眼认出是转义问题 —— 实测就是被一个中文名的 md 文件绊倒的。
+ *
+ *   -z 以 NUL 分隔并原样输出路径，对空格、引号、换行、非 ASCII 一律安全。
+ */
+function gitListFiles() {
+  const out = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' });
+  return out.split('\0').filter(Boolean);
 }
 
 function run(cmd, args, opts = {}) {
@@ -77,21 +93,23 @@ function main() {
   } catch (err) {
     console.error(String(err.stdout || '').trim());
     console.error('\n版本检查没过，拒绝打包。');
-    exitAfterFlush(1);
+    finish(1);
   }
 
   // ---- 1. 工作区必须干净 ----
   //
   // 发行包要能对应到某个确切的提交，否则出问题没法回溯"到底是哪份代码"。
-  const dirty = git('status', '--porcelain');
+  // 显示用的路径不要让 git 转义，否则中文文件名会变成 "\346\250\241..."，
+  // 报错时看不出到底是哪个文件脏了
+  const dirty = git('-c', 'core.quotePath=false', 'status', '--porcelain');
   if (dirty && !force) {
     console.error('工作区不干净，拒绝打包：\n');
     console.error(dirty.split('\n').map((l) => `  ${l}`).join('\n'));
     console.error('\n先提交，或者用 --force 强制打包（会在 RELEASE.txt 里标注 dirty）。');
-    exitAfterFlush(1);
+    finish(1);
   }
   const commit = git('rev-parse', '--short', 'HEAD');
-  console.log(`  提交     ${commit}${dirty ? '  ⚠️ 工作区脏（--force）' : ''}`);
+  console.log(`  提交     ${commit}${dirty && force ? '  ⚠️ 工作区脏（--force）' : ''}`);
 
   // ---- 2. 前端要先构建好 ----
   if (!skipBuild) {
@@ -101,14 +119,14 @@ function main() {
   const dist = path.join(ROOT, 'dist');
   if (!fs.existsSync(dist)) {
     console.error('\n找不到 dist/。先跑 npm run build，或去掉 --skip-build。');
-    exitAfterFlush(1);
+    finish(1);
   }
 
   // ---- 3. 铺开临时目录 ----
   if (fs.existsSync(STAGE)) removeDirSync(STAGE);
   fs.mkdirSync(STAGE, { recursive: true });
 
-  const tracked = git('ls-files').split('\n').filter(Boolean);
+  const tracked = gitListFiles();
   for (const rel of tracked) copyFile(rel);
   console.log(`  源码     ${tracked.length} 个跟踪文件`);
 

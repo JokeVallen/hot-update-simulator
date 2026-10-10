@@ -15,7 +15,7 @@
 //   npm run smoke
 
 const fs = require('fs');
-const { exitAfterFlush } = require('./lib/exit');
+const { finish, isExitSignal } = require('./lib/exit');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
@@ -86,7 +86,7 @@ function md5(buffer) {
 async function main() {
   if (!fs.existsSync(ASSETS_ROOT)) {
     console.error('找不到测试资产。请先执行：npm run sample\n');
-    exitAfterFlush(1);
+    finish(1);
   }
 
   // 备份配置，测试改坏了也能还原
@@ -578,10 +578,12 @@ async function main() {
   }
   console.log('='.repeat(56));
 
-  exitAfterFlush(failed ? 1 : 0);
+  finish(failed ? 1 : 0);
 }
 
 main().catch((err) => {
+  // 正常路径的 finish() 也是靠抛信号中断的，不能把它当成"测试自身出错"
+  if (isExitSignal(err)) throw err;
   console.error('\n冒烟测试自身出错了：');
   console.error(err);
   try {
@@ -589,5 +591,5 @@ main().catch((err) => {
   } catch {
     /* 还原失败就算了，不要掩盖原始错误 */
   }
-  exitAfterFlush(1);
+  finish(1);
 });

@@ -30,7 +30,7 @@ const express = require('express');
 // 不能用 fs.rmSync 删目录：Windows + 非 ASCII 路径上它会静默失败甚至让进程硬崩。
 // 详见 scripts/lib/safe-rm.js 的说明。
 const { removeDir, removeDirSync } = require('./lib/safe-rm');
-const { exitAfterFlush } = require('./lib/exit');
+const { finish, isExitSignal } = require('./lib/exit');
 
 const CONFIG_PATH = path.resolve(__dirname, '..', 'backend', 'config.json');
 // 必须和服务器用同一个存储根，否则设了 HOT_UPDATE_STORAGE 之后，
@@ -1783,18 +1783,95 @@ function testManualStructure() {
 // 原先这里有一份私有副本，其余脚本都没有，等于把失败明细放在赌运气上；
 // 现在统一走公共助手（清单 M-2）。
 
+/**
+ * 脚本退出机制本身必须有断言守着。
+ *
+ * 这不是纸上谈兵：把 process.exit 机械换成"排空后退出"时，曾让
+ * make-release.js 的"工作区不干净，拒绝打包"打印完**照样把包打了出去** ——
+ * 安全守卫拦不住后面的代码就等于没有守卫。而那一次没有任何测试发现它，
+ * 是用户真的去跑 npm run release 才暴露的。
+ */
+function testExitMechanism() {
+  section('脚本退出机制');
+
+  const LIB = path.join(__dirname, 'lib', 'exit.js').replace(/\\/g, '/');
+
+  const runProbe = (body) => {
+    try {
+      return {
+        code: 0,
+        out: execFileSync(process.execPath, ['-e', body], {
+          encoding: 'utf8', cwd: path.join(__dirname, '..'),
+        }),
+      };
+    } catch (e) {
+      return { code: e.status === undefined ? 1 : e.status, out: `${e.stdout || ''}${e.stderr || ''}` };
+    }
+  };
+
+  // ---- 1. finish() 必须真的中断后续代码 ----
+  const stopped = runProbe(`
+    const { finish } = require('${LIB}');
+    console.log('BEFORE');
+    finish(3);
+    console.log('AFTER');
+  `);
+  check('finish() 之后的代码不会执行（守卫要拦得住，而不只是打印一句）',
+    !stopped.out.includes('AFTER'), stopped.out.trim().replace(/\n/g, ' | '));
+  check('finish() 指定的退出码被保留',
+    stopped.code === 3, `退出码 ${stopped.code}（期望 3）`);
+  check('中断之前的输出仍然完整（排空没白做）',
+    stopped.out.includes('BEFORE'), stopped.out.trim());
+
+  // ---- 2. 被 try/catch 吞掉时，第一次的退出码说了算 ----
+  //
+  // 实测踩过：ui-check 的 try 里调 finish(0)、catch 里又调 finish(1)，
+  // 于是 21 条断言全过、退出码却是 1。
+  const swallowed = runProbe(`
+    const { finish } = require('${LIB}');
+    try { finish(0); } catch (e) { finish(1); }
+    console.log('SWALLOWED');
+  `);
+  check('退出信号被 catch 吞掉时，第一次的退出码仍然说了算',
+    swallowed.code === 0, `退出码 ${swallowed.code}（期望 0）`);
+
+  // ---- 3. 兜底：信号被吞掉且没人再抛，也不能把失败报成成功 ----
+  const lost = runProbe(`
+    const { finish } = require('${LIB}');
+    try { finish(1); } catch (e) { /* 悄悄吞掉 */ }
+    console.log('CONTINUED');
+  `);
+  check('信号被完全吞掉时进程最终仍以失败码退出（绝不能报成成功）',
+    lost.code === 1, `退出码 ${lost.code}（期望 1）`);
+  check('信号被吞掉后代码确实继续跑了（说明兜底不是多余的）',
+    lost.out.includes('CONTINUED'), lost.out.trim());
+
+  // ---- 4. 所有脚本都不该再出现裸 process.exit ----
+  //
+  // 裸 process.exit 会让末尾输出（往往正是失败明细）在 Windows 上凭空消失。
+  const offenders = fs.readdirSync(__dirname)
+    .filter((f) => f.endsWith('.js') && !f.startsWith('_'))
+    .filter((f) => f !== 'exit.js')
+    .filter((f) => /\bprocess\.exit\(/.test(fs.readFileSync(path.join(__dirname, f), 'utf8')));
+  check('没有脚本再直接调用 process.exit（否则末尾输出可能被截断）',
+    offenders.length === 0, offenders.join(', '));
+}
+
 // ============================================================ 主流程
 
 async function main() {
   if (!fs.existsSync(ASSETS_ROOT)) {
     console.error('找不到测试资产。请先执行：npm run sample\n');
-    process.exit(1);
+    // 用 finish 而不是 process.exit：后者不等 stdout 排空，
+    // 上面那句提示在 Windows 上可能根本看不到
+    finish(1);
   }
 
   const originalConfig = fs.readFileSync(CONFIG_PATH, 'utf8');
 
   try {
     testManualStructure();
+    testExitMechanism();
     await testPureFunctions();
     await testResponseRewriting();
     await testAssetEdgeCases();
@@ -1810,12 +1887,14 @@ async function main() {
   }
   console.log('='.repeat(56));
 
-  exitAfterFlush(failed ? 1 : 0);
+  finish(failed ? 1 : 0);
 }
 
 main().catch((err) => {
+  // 正常路径的 finish() 也是靠抛信号中断的，不能把它当成"测试自身出错"
+  if (isExitSignal(err)) throw err;
   console.error('\n回归测试自身出错了：');
   console.error(err);
   try { fs.writeFileSync(CONFIG_PATH, fs.readFileSync(CONFIG_PATH, 'utf8')); } catch { /* 忽略 */ }
-  exitAfterFlush(1);
+  finish(1);
 });

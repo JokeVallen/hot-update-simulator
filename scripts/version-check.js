@@ -16,7 +16,7 @@
 // 也会被 npm run release 自动调用 —— 没有变更记录的版本不允许打包出去。
 
 const fs = require('fs');
-const { exitAfterFlush } = require('./lib/exit');
+const { finish } = require('./lib/exit');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -127,7 +127,7 @@ for (const [good, label, detail] of checked) {
 console.log('');
 if (problems.length === 0) {
   console.log(`全部通过。当前版本 ${VERSION}。`);
-  exitAfterFlush(0);
+  finish(0);
 } else {
   console.log(`发现 ${problems.length} 个问题：`);
   for (const p of problems) console.log(`  - ${p}`);
@@ -137,5 +137,5 @@ if (problems.length === 0) {
   console.log('  2. npm run bump patch|minor|major   # 两份 package.json 一起改，并插入 CHANGELOG 骨架');
   console.log('  3. 填完 CHANGELOG，提交并 git tag');
   console.log('  4. npm run release');
-  exitAfterFlush(1);
+  finish(1);
 }
