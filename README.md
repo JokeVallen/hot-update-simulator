@@ -98,13 +98,17 @@ Lua 系（xLua / Tolua / Cocos）不需要它——那些项目的"代码"就是
 ## 快速开始
 
 ```bash
+git clone https://github.com/JokeVallen/hot-update-simulator.git
+cd hot-update-simulator
 npm install          # 后端依赖
+npm run build        # 构建前端（发行包已含 dist，但开发时要自己建）
 npm run sample       # 生成示例热更包（6 个 2MB 的假 AssetBundle）
 npm start            # 启动，默认 http://localhost:5500
 ```
 
-> 需要 **Node 20+**。后端是纯 JS（无原生模块），Windows / Linux / macOS 都能跑；
-> 目前只在 Windows 上充分验证过，Linux 由 CI（ubuntu-latest）覆盖。
+> 需要 **Node 20+**。后端是纯 JS（无原生模块），Windows / Linux / macOS 都能跑 ——
+> 已在 Windows 与 WSL2 的 Ubuntu 22.04 上实测，Linux 另由 CI（ubuntu-latest）覆盖；
+> **macOS 尚未验证**。
 
 | 地址 | 说明 |
 |---|---|
@@ -247,24 +251,42 @@ npm run docs-check   # 文档覆盖度：代码里的接口/配置/故障类型�
 **`package.json` 里的 `version` 是唯一来源。** Swagger 信息、面板页脚、发行包名
 全都从它派生，不单独维护。面板左下角常驻显示当前版本，方便确认"我跑的到底是哪个"。
 
-发一个新版本：
+#### 改动发生时就要记 —— 写进「未发布」
+
+> **每次改动都记一笔。** 这是本仓库的硬规则，原因很实际：这个项目真的漏记过三笔
+> （2.6.2 之后的三个提交），而"回头再补"在实践中就等于"忘了补"。
+
+`CHANGELOG.md` 顶部常驻一个 `## 未发布` 小节。**改完东西顺手把那一笔写进去**，
+不用先想版本号——那是发版时才决定的事：
+
+```markdown
+## 未发布
+
+### 修复
+
+- 某处坏了的地方，以及为什么
+```
+
+#### 发版本：把「未发布」提升成正式版本
 
 ```bash
 npm run bump minor          # 或 patch / major / 具体版本号如 1.2.0
 ```
 
-它会**一次做完该同步的三件事**，这正是最容易漏的地方：
+它会**一次做完该同步的三件事**：
 
 | 它做什么 | 漏了会怎样 |
 |---|---|
 | 改根 `package.json` | —— |
 | 改 `frontend/package.json` | 两处版本号漂移，而且看起来都"像"是对的 |
-| 在 `CHANGELOG.md` 插入带日期的小节 | 用的人不知道这次要不要升级、升了会怎样 |
+| 把 `## 未发布` 改名成 `## 1.2.0 - 日期`，并在上面新开一个空的 | 用的人不知道这次要不要升级、升了会怎样 |
 
-然后填 CHANGELOG、提交、打 tag、打包：
+如果 `## 未发布` 是空的，它会插入一个空骨架并**提醒你这次是事后补记** ——
+那说明改动发生时没记。
+
+然后提交、打 tag、打包：
 
 ```bash
-# 1. 把改动填进 CHANGELOG.md 新插入的小节（新增 / 变更 / 修复）
 git add -A && git commit -m "chore: 发布 1.1.0"
 git tag v1.1.0
 npm run release

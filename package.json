@@ -1,6 +1,6 @@
 {
   "name": "hot-update-simulator",
-  "version": "2.6.2",
+  "version": "2.6.3",
   "description": "游戏热更新服务端模拟器：可视化、可配置、带 API，用于复现弱网、断流、损坏等真实故障",
   "main": "backend/server.js",
   "scripts": {
@@ -34,9 +34,17 @@
     "game-server",
     "testing-tool"
   ],
-  "author": "",
+  "author": "JokeVallen (https://github.com/JokeVallen)",
   "license": "MIT",
   "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JokeVallen/hot-update-simulator.git"
+  },
+  "homepage": "https://github.com/JokeVallen/hot-update-simulator#readme",
+  "bugs": {
+    "url": "https://github.com/JokeVallen/hot-update-simulator/issues"
+  },
   "engines": {
     "node": ">=20"
   },

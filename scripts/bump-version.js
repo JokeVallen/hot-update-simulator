@@ -101,36 +101,47 @@ function bumpPkg(file, label) {
 bumpPkg(ROOT_PKG, 'package.json');
 bumpPkg(FRONTEND_PKG, 'frontend/package.json');
 
-// ---- 2. 在 CHANGELOG 里插入小节 ----
+// ---- 2. 把「未发布」提升成正式版本 ----
+//
+// 采用 Keep a Changelog 的标准流程：**改动发生时**就写进 `## 未发布`，
+// 升版本时把那一节改名成 `## X.Y.Z - 日期`，并在上面新开一个空的「未发布」。
+//
+// 为什么改成这样（原来是"插入空骨架再让人回头填"）：
+//   插入骨架意味着改动发生的时候没地方记，只能等到升版本时凭记忆回填 ——
+//   而"回头再补"在实践中就是"忘了补"（这个仓库真的漏过三笔）。
+//   有了固定的落脚点，"每次改动都记"才是一件顺手的事。
 const changelog = fs.readFileSync(CHANGELOG, 'utf8');
 if (new RegExp(`^##\\s+\\[?${next.replace(/\./g, '\\.')}\\]?(?:\\s|$)`, 'm').test(changelog)) {
   console.log(`  · CHANGELOG.md 已有 ${next} 的小节，跳过`);
 } else {
   const lines = changelog.split('\n');
-  // 插到「## 未发布」之后；没有「未发布」就插到第一个版本小节之前
-  let at = lines.findIndex((l) => /^##\s+未发布\s*$/.test(l));
-  if (at >= 0) {
-    at += 1;
-    // 跳过紧跟的空行，让插入位置干净
-    while (at < lines.length && lines[at].trim() === '') at += 1;
-  } else {
-    at = lines.findIndex((l) => /^##\s+\[?\d/.test(l));
-    if (at < 0) at = lines.length;
+  const unreleasedAt = lines.findIndex((l) => /^##\s+未发布\s*$/.test(l));
+
+  // 「未发布」下面有没有真的写了东西？（跳过空行与空的小标题）
+  let hasContent = false;
+  if (unreleasedAt >= 0) {
+    for (let i = unreleasedAt + 1; i < lines.length && !/^##\s/.test(lines[i]); i += 1) {
+      const t = lines[i].trim();
+      if (t && !/^###/.test(t)) { hasContent = true; break; }
+    }
   }
 
-  const section = [
-    `## ${next} - ${today()}`,
-    '',
-    '### 新增',
-    '',
-    '### 变更',
-    '',
-    '### 修复',
-    '',
-  ];
-  lines.splice(at, 0, ...section);
-  fs.writeFileSync(CHANGELOG, lines.join('\n'), 'utf8');
-  console.log(`  ✓ CHANGELOG.md 插入了 ${next} 的小节（${today()}）`);
+  if (hasContent) {
+    lines[unreleasedAt] = `## ${next} - ${today()}`;
+    lines.splice(unreleasedAt, 0, '## 未发布', '');
+    fs.writeFileSync(CHANGELOG, lines.join('\n'), 'utf8');
+    console.log(`  ✓ CHANGELOG.md 把「未发布」提升为 ${next}（${today()}），并新开了空的「未发布」`);
+  } else {
+    // 没有待发布内容 —— 插入空骨架，并提醒这次是"事后补记"
+    const at = unreleasedAt >= 0
+      ? (() => { let i = unreleasedAt + 1; while (i < lines.length && lines[i].trim() === '') i += 1; return i; })()
+      : (() => { const i = lines.findIndex((l) => /^##\s+\[?\d/.test(l)); return i < 0 ? lines.length : i; })();
+
+    lines.splice(at, 0, `## ${next} - ${today()}`, '', '### 新增', '', '### 变更', '', '### 修复', '');
+    fs.writeFileSync(CHANGELOG, lines.join('\n'), 'utf8');
+    console.log(`  ✓ CHANGELOG.md 插入了 ${next} 的空骨架（${today()}）`);
+    console.log('  ⚠️「未发布」是空的 —— 说明改动发生时没记。下次随手写进「未发布」，这里就不用补了');
+  }
 }
 
 // ---- 3. 自检一次 ----
