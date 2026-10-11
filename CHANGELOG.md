@@ -13,6 +13,29 @@
 
 ## 未发布
 
+## 2.6.5 - 2026-10-11
+
+### 修复
+
+- **CI 在 Node 20 上仍然失败：`ui-check` 用了全局 `WebSocket`**。
+  它从 **Node 22** 起才是稳定全局（21 要 `--experimental-websocket`，20 完全没有）。
+  于是 Node 20 上直接 `ReferenceError: WebSocket is not defined` 崩掉，
+  **而报错信息里完全看不出"是 Node 版本不够"**。
+
+  改成显式的就绪检查（`cdpReadiness()`），把两个前提分开说清楚：
+
+  | 缺什么 | 表现 |
+  |---|---|
+  | 没有 Chrome / Edge | 跳过，并列出找过哪些路径、怎么用 `CHROME_PATH` 指定 |
+  | 没有全局 WebSocket | 跳过，并说明需要 Node 22+、**服务器本身不受影响** |
+
+  `npm test` 会把跳过原因写进汇总（`跳过：Node v20.x 没有全局 WebSocket`）——
+  "跳过"和"通过"必须能区分开，否则 Node 20 上的 CI 看起来绿了，
+  实际少跑了一整块。
+
+  `engines` 仍是 `>=20`：服务器本身在 Node 20 上跑得好好的，只有这项
+  开发期的界面检查需要更新的 Node。
+
 ## 2.6.4 - 2026-10-11
 
 ### 修复

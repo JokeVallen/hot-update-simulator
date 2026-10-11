@@ -13,7 +13,7 @@ const DEBUG_PORT = 9491;
 const SERVER_PORT = 5777;
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
-const { findBrowser: locateBrowser, sandboxArgs } = require('./lib/browser');
+const { cdpReadiness, sandboxArgs } = require('./lib/browser');
 
 const put = (method, p, data) => new Promise((resolve) => {
   const body = data ? JSON.stringify(data) : null;
@@ -66,8 +66,13 @@ async function seedActivity() {
 
 (async () => {
   const original = fs.readFileSync(CONFIG);
-  const browser = locateBrowser();
-  if (!browser) { console.error('  没有找到 Chrome / Edge，跳过'); finish(1); }
+  const ready = cdpReadiness();
+  if (!ready.ok) {
+    console.error(`无法生成截图：${ready.reason}\n`);
+    console.error(ready.hint);
+    finish(1);
+  }
+  const browser = ready.browser;
 
   // 硬超时：这个脚本会起服务 + 浏览器，卡住时不能把配置留在改动状态。
   // 用 drainAndExit 而不是裸 process.exit —— 后者在 Windows 上可能截断输出

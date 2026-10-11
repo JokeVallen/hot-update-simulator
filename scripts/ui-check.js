@@ -28,16 +28,16 @@ const TARGET_URL = (process.argv[2] || 'http://127.0.0.1:5500').replace(/\/$/, '
 const DEBUG_PORT = 9333;
 const ROUTES = ['dashboard', 'network', 'faults', 'presets', 'logs', 'explorer', 'favorites', 'assets', 'publish', 'manual'];
 
-const { findBrowser, sandboxArgs, notFoundHint } = require('./lib/browser');
+const { sandboxArgs, cdpReadiness } = require('./lib/browser');
 
 function assertBrowser() {
-  const b = findBrowser();
-  if (!b) {
-    console.error('找不到 Chrome 或 Edge，无法做界面检查。\n');
-    console.error(notFoundHint());
+  const ready = cdpReadiness();
+  if (!ready.ok) {
+    console.error(`无法做界面检查：${ready.reason}\n`);
+    console.error(ready.hint);
     finish(2);
   }
-  return b;
+  return ready.browser;
 }
 
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });

@@ -16,7 +16,7 @@ const http = require('http');
 const net = require('net');
 const path = require('path');
 const { finish, isExitSignal } = require('./lib/exit');
-const { findBrowser } = require('./lib/browser');
+const { cdpReadiness } = require('./lib/browser');
 
 const ROOT = path.resolve(__dirname, '..');
 const NODE = process.execPath;
@@ -94,11 +94,13 @@ function run(script, args = []) {
     push(name, r.code, r.ms);
   }
 
-  // ---- ui-check：需要服务 + 浏览器 ----
-  const browser = findBrowser();
-  if (!browser) {
-    console.log('  ui-check       ·  跳过（没找到 Chrome / Edge）');
-    push('ui-check', 0, 0, '跳过');
+  // ---- ui-check：需要服务 + 能驱动无头浏览器 ----
+  const ready = cdpReadiness();
+  if (!ready.ok) {
+    // 明确说明**为什么**跳过 —— "跳过"和"通过"必须能区分开，
+    // 否则 Node 20 上的 CI 会看起来绿了，实际少跑了一整块
+    console.log(`  ui-check       ·  跳过（${ready.reason}）`);
+    push('ui-check', 0, 0, `跳过：${ready.reason}`);
   } else {
     process.stdout.write('  ui-check       …');
     const port = await freePort();

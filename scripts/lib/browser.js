@@ -83,4 +83,38 @@ function notFoundHint() {
   ].join('\n');
 }
 
-module.exports = { findBrowser, sandboxArgs, notFoundHint, CANDIDATES };
+/**
+ * 当前环境能不能驱动无头浏览器（界面检查的前提）。
+ *
+ * 两个前提，缺一不可：
+ *   1. 有 Chrome / Edge
+ *   2. 有全局 `WebSocket` —— **Node 22 才是稳定全局**
+ *      （21 要 `--experimental-websocket`，20 完全没有）
+ *
+ * 为什么要显式区分这两种情况：CI 上 Node 20 与 22 并行跑，20 会
+ * `ReferenceError: WebSocket is not defined` 直接崩掉，而报错信息里
+ * 完全看不出"是 Node 版本不够"。区分开之后，Node 20 会明确说
+ * "跳过，原因是没有全局 WebSocket"，而不是伪装成一个失败。
+ *
+ * @returns {{ok:true, browser:string}|{ok:false, reason:string, hint:string}}
+ */
+function cdpReadiness() {
+  const browser = findBrowser();
+  if (!browser) {
+    return { ok: false, reason: '找不到 Chrome / Edge', hint: notFoundHint() };
+  }
+  if (typeof globalThis.WebSocket !== 'function') {
+    return {
+      ok: false,
+      reason: `Node ${process.version} 没有全局 WebSocket（需要 Node 22+）`,
+      hint: '  界面检查要连 Chrome 的调试端口，靠的是内置的 WebSocket 客户端。\n'
+        + '  它从 Node 22 起才是稳定全局。服务器本身不受影响，只有这一项检查跑不了。\n'
+        + '  升级 Node，或跳过这项检查（npm test 会自动跳过）。',
+    };
+  }
+  return { ok: true, browser };
+}
+
+module.exports = {
+  findBrowser, sandboxArgs, notFoundHint, cdpReadiness, CANDIDATES,
+};

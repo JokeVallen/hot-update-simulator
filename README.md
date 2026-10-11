@@ -109,6 +109,11 @@ npm start            # 启动，默认 http://localhost:5500
 > 需要 **Node 20+**。后端是纯 JS（无原生模块），Windows / Linux / macOS 都能跑 ——
 > 已在 Windows 与 WSL2 的 Ubuntu 22.04 上实测，Linux 另由 CI（ubuntu-latest）覆盖；
 > **macOS 尚未验证**。
+>
+> `npm run ui-check`（界面检查）另外需要 **Node 22+ 和 Chrome / Edge** ——
+> 它靠内置的 WebSocket 客户端连 Chrome 的调试端口，而全局 `WebSocket`
+> 从 Node 22 起才有。条件不满足时 `npm test` 会**明确跳过并说明原因**，
+> 不会伪装成通过。
 
 | 地址 | 说明 |
 |---|---|
