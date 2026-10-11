@@ -86,6 +86,89 @@ function run(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', ...opts });
 }
 
+/**
+ * 找 gh（GitHub CLI）。
+ *
+ * 优先 PATH；再兜底几个常见安装位置 —— 装在非系统盘时（实测见过
+ * `D:\Program Files\GitHub CLI\`），PATH 里能不能找到取决于终端是不是
+ * 安装之后才开的。
+ */
+function findGh() {
+  const exe = process.platform === 'win32' ? 'gh.exe' : 'gh';
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean).concat(
+    process.platform === 'win32'
+      ? [path.join(process.env.ProgramFiles || '', 'GitHub CLI'),
+        path.join(process.env['ProgramFiles(x86)'] || '', 'GitHub CLI'),
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'GitHub CLI')]
+      : ['/usr/bin', '/usr/local/bin', '/snap/bin'],
+  );
+  for (const d of dirs) {
+    try {
+      const p = path.join(d, exe);
+      if (fs.existsSync(p)) return p;
+    } catch { /* 目录名不合法，跳过 */ }
+  }
+  return null;
+}
+
+/**
+ * 顺手在 GitHub 上建一个 Release，把 tgz 当附件传上去。
+ *
+ * **失败只警告，绝不让 `npm run release` 失败。** 打包是纯本地操作，
+ * 和 GitHub 没有依赖关系：没装 gh、没登录、离线、或者这是别人的 fork ——
+ * 都不该让"出个包"这件事做不成。
+ *
+ * 但也**不能静默跳过**：每一步跳过都说清原因和补救命令。
+ * "跳过"和"做成了"分不出来，比直接报错还糟。
+ *
+ * @param {string} tarball
+ */
+function publishRelease(tarball) {
+  const tag = `v${PKG.version}`;
+  const skip = (why) => console.log(`\n— GitHub Release：跳过（${why}）`);
+
+  const hasTag = (() => {
+    try { return git('tag', '-l', tag) === tag; } catch { return false; }
+  })();
+  if (!hasTag) return skip(`本地没有 tag ${tag} —— 先 git tag -a ${tag} -m "..."`);
+
+  // 必须确认 tag **已经推到远程**：否则 gh 会把 tag 建在默认分支 HEAD 上，
+  // 可能指向一个和这次发布无关的提交，而且不报错
+  const onRemote = (() => {
+    try {
+      return run('git', ['ls-remote', '--tags', 'origin', tag], { timeout: 20000 }).trim() !== '';
+    } catch { return false; }
+  })();
+  if (!onRemote) return skip(`tag ${tag} 还没推到远程 —— git push origin ${tag}`);
+
+  const gh = findGh();
+  if (!gh) return skip('没找到 gh（GitHub CLI）');
+
+  try {
+    run(gh, ['auth', 'status'], { timeout: 20000 });
+  } catch {
+    return skip('gh 还没登录 —— gh auth login');
+  }
+
+  const already = (() => {
+    try { run(gh, ['release', 'view', tag], { timeout: 20000 }); return true; } catch { return false; }
+  })();
+  if (already) return skip(`${tag} 的 Release 已经存在`);
+
+  process.stdout.write(`\n— GitHub Release：创建 ${tag} … `);
+  try {
+    const url = run(gh, ['release', 'create', tag, tarball,
+      '--title', PKG.version, '--generate-notes'], { timeout: 180000 }).trim();
+    console.log('✓');
+    console.log(`  ${url.split('\n').pop()}`);
+  } catch (err) {
+    console.log('✗');
+    const msg = `${err.stdout || ''}${err.stderr || ''}`.trim() || err.message;
+    console.log(`  ${msg.split('\n')[0]}`);
+    console.log('  打包本身已经成功，这一步可以稍后手动重试。');
+  }
+}
+
 function copyFile(rel) {
   const from = path.join(ROOT, rel);
   const to = path.join(STAGE, rel);
@@ -219,6 +302,9 @@ function main() {
   console.log('\n在别处使用：');
   console.log(`  mkdir D:\\hus-runtime && tar -xzf ${NAME}.tgz -C D:\\hus-runtime --strip-components=1`);
   console.log('  cd D:\\hus-runtime && npm install && npm start');
+
+  // ---- 7. 顺手在 GitHub 上建 Release ----
+  if (!argv.includes('--no-github')) publishRelease(tarball);
 }
 
 main();

@@ -289,13 +289,21 @@ npm run bump minor          # 或 patch / major / 具体版本号如 1.2.0
 如果 `## 未发布` 是空的，它会插入一个空骨架并**提醒你这次是事后补记** ——
 那说明改动发生时没记。
 
-然后提交、打 tag、打包：
+然后提交、打 tag、推到远程、打包：
 
 ```bash
 git add -A && git commit -m "chore: 发布 1.1.0"
-git tag v1.1.0
+git tag -a v1.1.0 -m "发布 1.1.0"
+git push origin main --tags
 npm run release
 ```
+
+`npm run release` 除了打出一个 `.tgz`，还会**顺手在 GitHub 上建 Release**
+并把 tgz 作为附件传上去（用 `gh`）——**git tag 和 GitHub Release 是两个东西**，
+只推 tag 的话 Release 页是空的。
+
+这一步失败**不会影响打包**（只警告）：没装 `gh`、没登录、离线都不妨碍出包。
+但每个跳过分支都会说明原因和补救命令，不会静默略过。不需要时加 `--no-github`。
 
 **`npm run version-check`** 会校验版本号格式、两处 package.json 是否一致、
 CHANGELOG 里有没有当前版本的小节。它也被 `npm run release` 自动调用——
