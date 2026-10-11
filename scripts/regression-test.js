@@ -2334,6 +2334,27 @@ function testExitMechanism() {
     .filter((f) => /\bprocess\.exit\(/.test(fs.readFileSync(path.join(__dirname, f), 'utf8')));
   check('没有脚本再直接调用 process.exit（否则末尾输出可能被截断）',
     offenders.length === 0, offenders.join(', '));
+
+  // ---- 5. 浏览器探测只能有一份实现 ----
+  //
+  // 这条来自一次真实事故：这个列表原本在三个脚本里各抄了一份，而且抄得不一致
+  // （run-all-checks 有 Linux 路径，ui-check 只有 Windows）。CI 上于是
+  // "外层说有浏览器 → 启动 ui-check → 内层说找不到"，两边互相矛盾。
+  // **同一件事的两份实现不一致，比两份都错更难查** —— 一边会掩盖另一边。
+  const scriptsWithOwnBrowserList = fs.readdirSync(__dirname)
+    .filter((f) => f.endsWith('.js') && !f.startsWith('_'))
+    // 排除这两者：browser.js 是唯一的实现；本文件是检查者，
+    // 它自己的正则字面量里就含路径特征，不排除就会自匹配（第一版踩过）
+    .filter((f) => f !== 'browser.js' && f !== 'regression-test.js')
+    .filter((f) => {
+      const t = fs.readFileSync(path.join(__dirname, f), 'utf8');
+      const hasQuotedPath = /['"][^'"\n]*(chrome\.exe|google-chrome|chromium|msedge\.exe)[^'"\n]*['"]/.test(t);
+      const definesList = /(CHROME_CANDIDATES|BROWSERS\s*=|const candidates\s*=)/.test(t);
+      return hasQuotedPath && definesList;
+    });
+  check('浏览器探测只有 lib/browser.js 一份实现（不允许各脚本自己抄）',
+    scriptsWithOwnBrowserList.length === 0,
+    `自己抄了一份的: ${scriptsWithOwnBrowserList.join(', ')}`);
 }
 
 // ============================================================ 主流程

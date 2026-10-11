@@ -13,10 +13,7 @@ const DEBUG_PORT = 9491;
 const SERVER_PORT = 5777;
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
-const BROWSERS = process.platform === 'win32'
-  ? ['D:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe']
-  : ['/usr/bin/google-chrome', '/usr/bin/chromium'];
+const { findBrowser: locateBrowser, sandboxArgs } = require('./lib/browser');
 
 const put = (method, p, data) => new Promise((resolve) => {
   const body = data ? JSON.stringify(data) : null;
@@ -69,7 +66,7 @@ async function seedActivity() {
 
 (async () => {
   const original = fs.readFileSync(CONFIG);
-  const browser = BROWSERS.find((b) => fs.existsSync(b));
+  const browser = locateBrowser();
   if (!browser) { console.error('  没有找到 Chrome / Edge，跳过'); finish(1); }
 
   // 硬超时：这个脚本会起服务 + 浏览器，卡住时不能把配置留在改动状态。
@@ -94,6 +91,7 @@ async function seedActivity() {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hus-shot-'));
   const child = spawn(browser, [
     '--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars',
+    ...sandboxArgs(),
     `--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${userDataDir}`,
     '--window-size=1500,1000', 'about:blank',
   ], { stdio: 'ignore' });

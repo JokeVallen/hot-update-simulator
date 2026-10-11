@@ -13,6 +13,31 @@
 
 ## 未发布
 
+## 2.6.4 - 2026-10-11
+
+### 修复
+
+- **CI 在 Linux 上失败：`ui-check` 找不到浏览器**。它的候选路径**只有 Windows**，
+  而 `run-all-checks.js` 里**另有一份**带 Linux 路径的实现。于是 CI 上：
+  runner 判定"有浏览器"→ 启动 `ui-check` → `ui-check` 自己找不到 → `finish(2)`
+  → `npm test` 失败。
+
+  根因不是"漏了路径"，而是**同一件事有三份实现且不一致**
+  （`ui-check.js`、`run-all-checks.js`、`make-screenshots.js`）。
+  两份实现不一致会比两份都错更难查——一边的行为会掩盖另一边。
+
+  抽成 `scripts/lib/browser.js`，三处统一：
+
+  | | 之前 | 现在 |
+  |---|---|---|
+  | 实现份数 | 3 份，互不一致 | 1 份 |
+  | Linux 路径 | 只有 `run-all-checks` 有 | 全部都有（7 个候选） |
+  | macOS 路径 | 只有 `run-all-checks` 有 | 全部都有（3 个候选） |
+  | 环境变量覆盖 | 无 | `CHROME_PATH` / `CHROME_BIN` / `PUPPETEER_EXECUTABLE_PATH` |
+  | root 下的沙箱参数 | 无 | 自动加 `--no-sandbox`（容器/CI 必需） |
+
+  新增断言：**浏览器探测只能有一份实现**。三个脚本里任何一处再抄一份都会被报出来。
+
 ## 2.6.3 - 2026-10-11
 
 这一版是**开源准备**加**在真 Linux 上实测**的结果。服务端本身没有功能变化。

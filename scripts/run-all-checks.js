@@ -12,11 +12,11 @@
 // 一次跑完看到全部问题，比修一个跑一次快得多。
 
 const { spawn, spawnSync } = require('child_process');
-const fs = require('fs');
 const http = require('http');
 const net = require('net');
 const path = require('path');
 const { finish, isExitSignal } = require('./lib/exit');
+const { findBrowser } = require('./lib/browser');
 
 const ROOT = path.resolve(__dirname, '..');
 const NODE = process.execPath;
@@ -48,25 +48,6 @@ async function waitHealthy(port, timeoutMs = 15000) {
     await sleep(250);
   }
   return false;
-}
-
-/** 找一个可用的 Chrome / Edge（ui-check 需要）。 */
-function findBrowser() {
-  const candidates = process.platform === 'win32'
-    ? [
-      'D:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    ]
-    : [
-      '/usr/bin/google-chrome',
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    ];
-  return candidates.find((p) => fs.existsSync(p)) || null;
 }
 
 function run(script, args = []) {

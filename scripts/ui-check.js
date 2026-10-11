@@ -28,19 +28,16 @@ const TARGET_URL = (process.argv[2] || 'http://127.0.0.1:5500').replace(/\/$/, '
 const DEBUG_PORT = 9333;
 const ROUTES = ['dashboard', 'network', 'faults', 'presets', 'logs', 'explorer', 'favorites', 'assets', 'publish', 'manual'];
 
-const CHROME_CANDIDATES = [
-  'D:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-];
+const { findBrowser, sandboxArgs, notFoundHint } = require('./lib/browser');
 
-function findBrowser() {
-  for (const candidate of CHROME_CANDIDATES) {
-    if (fs.existsSync(candidate)) return candidate;
+function assertBrowser() {
+  const b = findBrowser();
+  if (!b) {
+    console.error('找不到 Chrome 或 Edge，无法做界面检查。\n');
+    console.error(notFoundHint());
+    finish(2);
   }
-  return null;
+  return b;
 }
 
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
@@ -101,11 +98,7 @@ async function httpJson(url) {
 }
 
 async function main() {
-  const browser = findBrowser();
-  if (!browser) {
-    console.error('找不到 Chrome 或 Edge，无法做界面检查。');
-    finish(2);
-  }
+  const browser = assertBrowser();
 
   // 界面检查会点「急停」等按钮，那些操作会真的写进 backend/config.json。
   // 跑完必须还原，否则每跑一次测试就把用户的模拟参数改一遍
@@ -147,6 +140,8 @@ async function main() {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-extensions',
+    // root 下 Chrome 会拒绝启动沙箱（容器/CI 里常见），由 lib/browser 判断要不要加
+    ...sandboxArgs(),
     `--remote-debugging-port=${DEBUG_PORT}`,
     `--user-data-dir=${userDataDir}`,
     '--window-size=1600,1000',
