@@ -695,6 +695,26 @@ async function testAssetEdgeCases() {
       stillOk.status === 200 && stillOk.body.length === 100000,
       `状态 ${stillOk.status}, ${stillOk.body.length} 字节`);
 
+    // ---------------- 冒号的平台差异 ----------------
+    //
+    // ':' 只在 Windows 上有特殊含义（备用数据流 file.txt:secret、盘符）。
+    // POSIX 上它是合法文件名字符 —— 一概拒绝会让 Linux/macOS 上名叫
+    // `v1:2/bundle.ab` 的资源永远 404，而使用者看不出原因。
+    {
+      const colonName = 'v1:2-bundle.ab';
+      fs.writeFileSync(path.join(probeDir, colonName), Buffer.alloc(32, 9));
+
+      const viaColon = await request(port,
+        `/assets/RegressionProbe/${encodeURIComponent(colonName)}`);
+      if (process.platform === 'win32') {
+        check('Windows 上仍拒绝带冒号的路径（备用数据流 / 盘符）',
+          viaColon.status !== 200, `状态 ${viaColon.status}`);
+      } else {
+        check('POSIX 上带冒号的文件名可以正常取（它是合法字符）',
+          viaColon.status === 200, `状态 ${viaColon.status}`);
+      }
+    }
+
     // ---------------- 0 字节文件 ----------------
     const empty = await request(port, '/assets/RegressionProbe/empty.bin');
     check('0 字节文件返回 200 而不是 500',

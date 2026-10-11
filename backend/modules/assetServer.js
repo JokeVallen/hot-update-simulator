@@ -98,11 +98,13 @@ class AssetServer {
   safeResolve(root, segment) {
     if (!segment) return null;
 
-    // 空字节截断攻击
+    // 空字节截断攻击（所有平台都要拦）
     if (segment.includes('\0')) return null;
 
-    // Windows 备用数据流（file.txt:secret）和盘符
-    if (segment.includes(':')) return null;
+    // ':' 只在 Windows 上有特殊含义（备用数据流 file.txt:secret、盘符），
+    // **POSIX 上它是合法的文件名字符** —— 一概拒绝会让 Linux/macOS 上
+    // 名叫 `v1:2/bundle.ab` 的资源永远 404，而用户看不出原因。
+    if (process.platform === 'win32' && segment.includes(':')) return null;
 
     const target = path.resolve(root, segment);
 
