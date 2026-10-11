@@ -1,5 +1,6 @@
 # 依赖
 node_modules/
+frontend/node_modules/
 
 # 构建产物
 dist/
@@ -10,15 +11,16 @@ release/
 # 运行时数据（预置方案、收藏、上传的热更包等）
 storage/
 
-# 环境变量
+# 私有工作文档（bug 清单、评估报告、交接记录……）
+# 判据：使用者**不需要**它来用这个工具。要公开的文档放 docs/ 或 README。
+dev-doc/
+
+# 环境变量（.env.example 是模板，要留着）
 .env
 .env.*
 !.env.example
 
-# 本次沙箱权限修复留下的备份/回滚脚本
-.acl-recovery/
-
-# 界面检查脚本生成的截图（自己跑 npm run ui-check 就有了）
+# 界面检查的截图（自己跑 npm run ui-check 就有了）
 ui-check-shots/
 ui-check-dashboard.png
 
@@ -32,3 +34,8 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# 编辑器/工具链的临时文件
+*.tsbuildinfo
+.cache/
+.tmp/

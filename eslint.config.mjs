@@ -73,8 +73,9 @@ export default [
       '**/node_modules/**',
       'dist/**',
       'storage/**',
+      'release/**',
       'ui-check-shots/**',
-      '.acl-recovery/**',
+      'dev-doc/**',
     ],
   },
 

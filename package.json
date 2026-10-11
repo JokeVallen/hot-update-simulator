@@ -9,6 +9,8 @@
     "sample": "node scripts/make-sample-assets.js",
     "build": "cd frontend && npm run build",
     "dev:web": "cd frontend && npm run dev",
+    "test": "node scripts/run-all-checks.js",
+    "shots": "node scripts/make-screenshots.js",
     "smoke": "node scripts/smoke-test.js",
     "regression": "node scripts/regression-test.js",
     "lint": "eslint .",
@@ -26,11 +28,18 @@
     "assetbundle",
     "simulator",
     "network",
-    "chaos"
+    "chaos",
+    "fault-injection",
+    "weak-network",
+    "game-server",
+    "testing-tool"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "dotenv": "^18.0.5",
     "express": "^5.2.1",

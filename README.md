@@ -11,6 +11,19 @@
 > [`manual.en.md`](backend/public/manual.en.md)），服务启动后也可以直接在浏览器里看
 > `http://localhost:5500/manual`——面板里渲染好的版本，带目录，跟着界面语言切换。
 
+## 长什么样
+
+| 总览 | 网络模拟 |
+|---|---|
+| ![总览](docs/screenshots/dashboard.png) | ![网络模拟](docs/screenshots/network.png) |
+
+**故障注入**——8 种故障类型，每条规则都能单独设匹配条件、概率、生效次数与时间窗：
+
+![故障注入](docs/screenshots/faults.png)
+
+> 三张图由 `npm run shots` 生成（临时起一个服务 → 造一批被模拟过的请求 → 截图 →
+> 自动还原配置），所以展示的是"工具真的在干活"的状态，不是空面板。
+
 ---
 
 ## 快速开始

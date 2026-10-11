@@ -1070,11 +1070,12 @@ When the client sends no `deviceId`, nothing is intercepted (doing so would shut
 The project ships with several checks. Running them after a change beats reading code by eye:
 
 ```bash
+npm test             # Run every check below in one go (ui-check starts a throwaway server itself)
 npm run lint         # ESLint, with complexity budgets (complexity / max-depth / max-lines)
 npm run arch         # Structure: dependency cycles / layer direction / orphans / size spread
 npm run smoke        # Backend end-to-end: 74 assertions, every fault type actually triggered
-npm run regression   # Edges and regressions: 66 assertions covering chunked / 0-byte / Range / caching / version semantics
-npm run ui-check     # Frontend: headless Chrome walks all 8 routes and scans each page for untranslated text
+npm run regression   # Edges and regressions: 247 assertions covering chunked / 0-byte / Range / caching / version semantics
+npm run ui-check     # Frontend: headless Chrome walks all 10 routes and scans each page for untranslated text
 npm run soak         # Stability: 400 mixed requests, checks memory stays flat and the server still works afterwards
 npm run docs-check   # Doc coverage: are every endpoint / config key / fault type still written up in this manual?
 npm run version-check # Version consistency: format, both package.json files, and a CHANGELOG entry

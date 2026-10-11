@@ -1043,11 +1043,12 @@ npm start
 项目自带几套检查。改完代码跑一遍，比人肉翻要可靠得多：
 
 ```bash
+npm test             # 一次跑完全部检查（下面的都在里面；ui-check 会自动起一个临时服务）
 npm run lint         # ESLint，含复杂度预算（complexity / max-depth / max-lines）
 npm run arch         # 结构：循环依赖 / 分层方向 / 孤儿模块 / 规模分布
 npm run smoke        # 后端端到端：74 项断言，每种故障都真的触发一遍
-npm run regression   # 边界与回归：66 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
-npm run ui-check     # 前端界面：无头 Chrome 走完 8 个路由，并逐页扫描漏翻
+npm run regression   # 边界与回归：247 项断言，覆盖 chunked / 0 字节 / Range / 缓存 / 版本语义
+npm run ui-check     # 前端界面：无头 Chrome 走完 10 个路由，并逐页扫描漏翻
 npm run soak         # 稳定性：400 个混合请求，检查内存是否稳定、结束后是否仍可用
 npm run docs-check   # 文档覆盖度：代码里的接口/配置/故障类型有没有漏写进本手册
 npm run version-check # 版本一致性：版本号格式、两份 package.json、CHANGELOG 条目

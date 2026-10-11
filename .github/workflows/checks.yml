@@ -1,0 +1,55 @@
+name: checks
+
+# 这个项目自带 8 道闸门（lint / 结构 / 文档覆盖 / 版本一致 / 回归 / 冒烟 / 界面 / 稳定性），
+# CI 的作用就是让"这项目质量如何"一眼可见 —— 而不是让人 clone 下来自己跑。
+#
+# 跑的是 `npm test`，也就是本地那条命令，**不另写一套**：
+# CI 和本地行为不一致是最容易腐烂的东西。
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# 同一分支连续推送时，把没跑完的旧任务取消掉，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Express 5 要 Node 18+；这里覆盖声明的下限与当前的 LTS
+        node-version: ['20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: 安装后端依赖
+        run: npm ci
+
+      - name: 安装前端依赖
+        run: npm ci --prefix frontend
+
+      - name: 构建前端
+        run: npm run build
+
+      - name: 生成示例热更包
+        # 回归测试与冒烟测试都需要这批资产，否则会以"找不到测试资产"退出
+        run: npm run sample
+
+      - name: 界面检查需要 Chrome
+        # ubuntu-latest 自带 google-chrome，这里只确认一下；
+        # 找不到时 ui-check 会自己跳过（run-all-checks.js 里做了降级）
+        run: google-chrome --version || echo "没有 Chrome，ui-check 会跳过"
+
+      - name: 跑全部闸门
+        run: npm test
