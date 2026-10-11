@@ -1,8 +1,78 @@
 # 热更新模拟器 · 使用手册
 
 一个用来模拟**真实游戏热更新服务端**的调试工具。目的不是"提供热更功能"，而是
-**把热更客户端会遇到的各种恶劣情况复现出来**，让 U3D 端的下载、校验、重试、续传
-逻辑在进真机测试之前就被打够。
+**把热更客户端会遇到的各种恶劣情况复现出来**——弱网、断流、截断、内容损坏、超时
+——让下载、校验、重试、续传逻辑在进真机测试之前就被打够。
+
+**它不绑定引擎。** 服务端眼里资源就是「任意字节流 + HTTP 语义」：平台是目录名、
+文件是二进制、版本和清单都是普通 JSON。所以 Unity 的 AssetBundle / Addressables、
+Cocos 的 Asset Bundle、Unreal 的 Pak、自研引擎的整文件方案，都能用它压测。
+
+需要 **Node 20+**。后端是纯 JS（无原生模块），Windows / Linux / macOS 都能跑。
+
+---
+
+## 支持哪些热更方案
+
+### 两种用法，按你的客户端选
+
+**用法一：用模拟器自己的清单接口**（适合自己写热更逻辑，或自研引擎）
+
+```
+GET /api/version   → 要不要更新、更新到哪个版本
+GET /api/manifest  → 文件清单（路径 / 大小 / 摘要 / 下载地址）
+GET /assets/...    → 下文件
+```
+
+**用法二：把模拟器当"带故障的静态文件服务器"**（适合引擎自带清单格式的）
+
+引擎自带的热更框架（Cocos 的 `AssetsManager`、Addressables 的 catalog、
+Unreal 的 patch 等）都要求清单是**它们各自的 schema**。模拟器不生成那些格式，
+但你可以：
+
+1. 把引擎产出的清单文件**当普通文件**放进平台目录
+   （例如 `assets/Android/project.manifest`）
+2. 客户端把 `remoteManifestUrl` 指向 `/assets/Android/project.manifest`
+3. 清单里的文件地址用 `/assets/{平台}/{路径}` 的形态
+
+于是模拟器只负责**发文件 + 注入故障**，清单的语义完全交给引擎。
+这条路不用改模拟器一行代码。
+
+### 各引擎的对应关系
+
+| 引擎 | 典型热更方案 | 怎么用 | 代码热更轨道 |
+|---|---|---|---|
+| **Unity** | AssetBundle（`.ab` / `.bundle`） | 用法一或二都行 | — |
+| **Unity** | Addressables（`catalog_*.json` + `.hash`） | **用法二**（catalog 是引擎的 schema） | — |
+| **Unity** | HybridCLR / ILRuntime / xLua | 用法一 | ✅ `code` 块 |
+| **Unreal** | `.pak` + patch | 用法二（或用法一发 `.pak`） | — |
+| **Cocos Creator** | Asset Bundle + `project.manifest` | **用法二**（清单格式是 Cocos 定的） | 纯 JS，走资源轨道 |
+| **LayaAir** | `version.json` + `.ls/.lh/.lm` | 用法二 | 纯 JS，走资源轨道 |
+| **Godot** | `.pck` patch（4.x） | 用法一或二 | — |
+| **自研 / 其它** | 任意「清单 + 整文件」方案 | **用法一**（最贴合） | — |
+
+### 代码热更轨道（`code` 块）是 Unity 特有的
+
+`manifest.json` 里的 `code` 块（`dir: dll`、`minAppVersion`、`aotHash`）是为
+**HybridCLR + IL2CPP** 那类"热更 DLL 需要和主包 AOT 元数据匹配"的场景设计的。
+它是**可选的**：不写这个块，`/api/version` 就返回 `code: null`，代码轨道整个消失，
+其余一切照常。
+
+Lua 系（xLua / Tolua / Cocos）不需要它——那些项目的"代码"就是普通文件，
+走资源轨道即可。
+
+### 它**不**做什么
+
+说清楚边界比列功能有用：
+
+- **不解析引擎格式**：不认 AB 依赖、不读 catalog、不校验资源结构
+- **不做差量包**：只发整文件。Lua 按文件增量没问题；整包 DLL / 整个 `.pak`
+  的二进制 diff 做不了
+- **不管文件依赖顺序**：清单是平铺的，没有"必须先下 A 再下 B"
+- **不做引擎侧校验**：字节码版本、DLL 架构不匹配之类，服务器不认
+
+这四条都需要客户端深度配合，而且是**具体管线**的特征，不是「通用服务端模拟器」
+该负的责任。
 
 ---
 

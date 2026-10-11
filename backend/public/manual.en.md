@@ -1,8 +1,78 @@
 # Hot Update Simulator · Manual
 
 A debugging tool for simulating a **real game hot-update server**. The point is not to "offer hot-update features", but to
-**reproduce the ugly conditions a hot-update client will run into**, so the Unity side's download, verification, retry and resume
-logic takes a beating long before it ever reaches a real device.
+**reproduce the ugly conditions a hot-update client will run into** — weak networks, dropped connections, truncation,
+corrupted content, timeouts — so your download, verification, retry and resume logic takes a beating long before it ever
+reaches a real device.
+
+**It is not tied to any engine.** To the server, assets are just "arbitrary bytes over HTTP": a platform is a directory
+name, a file is a binary blob, versions and manifests are plain JSON. So Unity's AssetBundle / Addressables, Cocos's
+asset bundles, Unreal's paks, or a home-grown whole-file scheme can all be load-tested with it.
+
+Requires **Node 20+**. The backend is pure JS (no native modules), so Windows / Linux / macOS all work.
+
+---
+
+## Which Hot-Update Schemes It Supports
+
+### Two ways to use it, depending on your client
+
+**Way 1: use the simulator's own manifest endpoints** (for home-grown hot-update logic or a custom engine)
+
+```
+GET /api/version   → is an update needed, and to which version
+GET /api/manifest  → file list (path / size / digest / download URL)
+GET /assets/...    → download a file
+```
+
+**Way 2: treat the simulator as a "static file server with faults"** (for engines that ship their own manifest format)
+
+Built-in frameworks — Cocos's `AssetsManager`, the Addressables catalog, the Unreal patch system — all require the
+manifest to be in **their own schema**. The simulator does not emit those formats, but you can:
+
+1. drop the manifest your engine produced **into the platform directory as an ordinary file**
+   (e.g. `assets/Android/project.manifest`)
+2. point the client's `remoteManifestUrl` at `/assets/Android/project.manifest`
+3. write the file URLs inside it as `/assets/{platform}/{path}`
+
+The simulator then only **serves files and injects faults**; the manifest semantics stay entirely with the engine.
+This route needs no changes to the simulator at all.
+
+### How each engine maps onto it
+
+| Engine | Typical scheme | How to use it | Code track |
+|---|---|---|---|
+| **Unity** | AssetBundle (`.ab` / `.bundle`) | Way 1 or 2 | — |
+| **Unity** | Addressables (`catalog_*.json` + `.hash`) | **Way 2** (the catalog is the engine's schema) | — |
+| **Unity** | HybridCLR / ILRuntime / xLua | Way 1 | ✅ `code` block |
+| **Unreal** | `.pak` + patch | Way 2 (or Way 1 serving `.pak`) | — |
+| **Cocos Creator** | asset bundles + `project.manifest` | **Way 2** (Cocos defines the manifest format) | plain JS, resource track |
+| **LayaAir** | `version.json` + `.ls/.lh/.lm` | Way 2 | plain JS, resource track |
+| **Godot** | `.pck` patch (4.x) | Way 1 or 2 | — |
+| **Custom / other** | any "manifest + whole files" scheme | **Way 1** (the closest fit) | — |
+
+### The code track (the `code` block) is Unity-specific
+
+The `code` block in `manifest.json` (`dir: dll`, `minAppVersion`, `aotHash`) exists for **HybridCLR + IL2CPP**-style
+setups, where a hot-updated DLL has to match the base package's AOT metadata. It is **optional**: leave it out and
+`/api/version` returns `code: null`, the code track disappears entirely, and everything else carries on unchanged.
+
+Lua-based projects (xLua / Tolua / Cocos) do not need it — there, "code" is just ordinary files and travels on the
+resource track.
+
+### What it does **not** do
+
+Being explicit about the boundary beats listing features:
+
+- **No engine format parsing**: no AssetBundle dependencies, no catalog reading, no asset structure validation
+- **No differential patches**: whole files only. File-by-file increment suits Lua projects; a binary diff of a
+  monolithic DLL or a whole `.pak` is out of scope
+- **No inter-file dependency ordering**: the manifest is a flat list
+- **No engine-side validation**: bytecode versions, DLL architecture mismatches — the server does not understand any
+  of it
+
+All four require deep client cooperation, and they are characteristics of a **specific pipeline** rather than something
+a "generic server simulator" should own.
 
 ---
 

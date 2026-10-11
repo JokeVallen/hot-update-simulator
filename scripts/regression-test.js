@@ -232,15 +232,31 @@ async function testPureFunctions() {
         migrated.get('server.assetDir') === 'assets',
         `迁移后 = ${JSON.stringify(migrated.get('server.assetDir'))}`);
 
-      // 用户自己填的路径不能被误伤
-      fs.writeFileSync(tmpCfg, JSON.stringify({ server: { assetDir: 'D:\\MyBundles' } }), 'utf8');
+      // 用户自己填的路径不能被误伤。
+      // ⚠️ 这里必须用**当前平台的**绝对路径写法：`D:\MyBundles` 在 POSIX 上
+      // 不是绝对路径（它只是一个含冒号和反斜杠的文件名），于是
+      // `path.isAbsolute()` 返回 false、会被当成相对路径拼到 storageRoot 后面。
+      // 这不是 bug，是 path 模块的正确行为 —— 但测试用 Windows 写法写死，
+      // 就只能在 Windows 上过（Linux 上实测失败过）。
+      const absBundleDir = process.platform === 'win32'
+        ? 'D:\\MyBundles'
+        : '/srv/unity-bundles/Android';
+      fs.writeFileSync(tmpCfg, JSON.stringify({ server: { assetDir: absBundleDir } }), 'utf8');
       const custom = new ConfigManager(tmpCfg);
       check('用户自己填的 assetDir 不会被迁移动到',
-        custom.get('server.assetDir') === 'D:\\MyBundles',
+        custom.get('server.assetDir') === absBundleDir,
         `得到 ${JSON.stringify(custom.get('server.assetDir'))}`);
       check('绝对路径的 assetDir 原样使用（可以直接指向 Unity 构建产物）',
-        custom.resolvePath('server.assetDir', paths.storageRoot()) === 'D:\\MyBundles',
+        custom.resolvePath('server.assetDir', paths.storageRoot()) === absBundleDir,
         custom.resolvePath('server.assetDir', paths.storageRoot()));
+
+      // 反过来：本平台的相对路径要拼到存储根下（跨平台都该成立）
+      fs.writeFileSync(tmpCfg, JSON.stringify({ server: { assetDir: 'my-bundles' } }), 'utf8');
+      const relCfg = new ConfigManager(tmpCfg);
+      check('相对路径的 assetDir 拼到存储根下',
+        relCfg.resolvePath('server.assetDir', paths.storageRoot())
+          === path.join(paths.storageRoot(), 'my-bundles'),
+        relCfg.resolvePath('server.assetDir', paths.storageRoot()));
     } finally {
       try { fs.unlinkSync(tmpCfg); } catch { /* 忽略 */ }
     }
@@ -1042,6 +1058,26 @@ async function testAssetEdgeCases() {
     /** 时间维度的测试必须真的等，所以这里要一个 sleep。 */
     const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
+    /**
+     * 轮询等到某个条件成立。
+     *
+     * 为什么不用「睡固定时长 → 断言一次」：那种写法把测试正确性押在
+     * "睡眠一定比窗口长"上，裕度只有两三百毫秒。在负载高的机器上
+     * （CI、WSL）实测会偶发失败 —— **而且失败信息会说"功能没生效"，
+     * 指向错的方向**，比不测更费时间。
+     *
+     * 轮询则与机器快慢无关：条件成立就继续，超时才失败。
+     */
+    const waitFor = async (predicate, timeoutMs = 3000, everyMs = 60) => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const ok = await predicate();
+        if (ok) return true;
+        if (Date.now() > deadline) return false;
+        await sleep(everyMs);
+      }
+    };
+
     const clockOf = async () => JSON.parse(
       (await request(port, '/api/control/fault/rules')).body.toString(),
     );
@@ -1069,10 +1105,12 @@ async function testAssetEdgeCases() {
     check('未到点时请求不被注入（200 而不是 500）',
       beforePoint.status === 200, `状态 ${beforePoint.status}`);
 
-    await sleep(800);
-    const afterPoint = await request(port, '/api/version?platform=Android&current=1.0.0');
-    check('过了 afterMs 之后开始生效',
-      afterPoint.status === 500, `状态 ${afterPoint.status}`);
+    // 轮询等到真的生效，而不是"睡 800 再赌一次"
+    const becameActive = await waitFor(async () => (
+      (await request(port, '/api/version?platform=Android&current=1.0.0')).status === 500
+    ));
+    check('过了 afterMs 之后开始生效（轮询等待，不依赖睡眠裕度）',
+      becameActive, '超过 3 秒仍未生效');
 
     // ---- forMs：到时自动恢复 ----
     await clearFaults(port);
@@ -1090,11 +1128,12 @@ async function testAssetEdgeCases() {
       typeof listing2.rules[0].expiresInMs === 'number' && listing2.rules[0].expiresInMs > 0,
       `expiresInMs=${listing2.rules[0].expiresInMs}`);
 
-    await sleep(700);
-    const outWindow = await request(port, '/api/version?platform=Android&current=1.0.0');
+    const windowClosed = await waitFor(async () => (
+      (await request(port, '/api/version?platform=Android&current=1.0.0')).status === 200
+    ));
     listing2 = await clockOf();
-    check('窗口过后自动恢复，不再注入',
-      outWindow.status === 200, `状态 ${outWindow.status}`);
+    check('窗口过后自动恢复，不再注入（轮询等待）',
+      windowClosed, '超过 3 秒仍未恢复');
     check('窗口过后 effectiveReason 是 window-expired',
       listing2.rules[0].effectiveReason === 'window-expired', listing2.rules[0].effectiveReason);
 
